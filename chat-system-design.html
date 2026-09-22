@@ -1,0 +1,1355 @@
+<title>Chat at Planet Scale</title>
+<meta name="description" content="Designing a real-time chat system from a single server to ChatGPT scale.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root{
+    --ground:#F4F6F9; --surface:#FFFFFF; --surface-2:#EDF1F6;
+    --ink:#14181F; --ink-soft:#333B48; --muted:#5A6472; --faint:#8A94A6;
+    --border:#DDE3EC; --border-strong:#C6CFDC;
+    --accent:#1E5EFF; --accent-soft:#E4ECFF; --accent-ink:#0B3AC2;
+    --teal:#0E9AA5; --teal-soft:#DCF4F5;
+    --green:#16A34A; --green-soft:#DCFBE7;
+    --amber:#C77706; --amber-soft:#FBEFD8;
+    --red:#DC2626; --red-soft:#FBE0E0;
+    --purple:#7C3AED; --purple-soft:#EEE6FE;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --disp:"Archivo",var(--sans);
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --shadow:0 1px 2px rgba(20,24,31,.04),0 8px 24px -12px rgba(20,24,31,.18);
+    --maxw:1180px; --measure:70ch;
+  }
+  :root:not([data-theme="light"]){
+    @media (prefers-color-scheme: dark){
+      --ground:#0C0F14; --surface:#141922; --surface-2:#1B222D;
+      --ink:#E7ECF3; --ink-soft:#C4CDDB; --muted:#93A0B4; --faint:#68748A;
+      --border:#242C39; --border-strong:#323C4C;
+      --accent:#5B8CFF; --accent-soft:#182742; --accent-ink:#A9C3FF;
+      --teal:#3AC6D0; --teal-soft:#122B2E;
+      --green:#4ADE80; --green-soft:#12301F;
+      --amber:#F0B44C; --amber-soft:#32260F;
+      --red:#F87171; --red-soft:#341717;
+      --purple:#A98BFF; --purple-soft:#221838;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 30px -14px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0C0F14; --surface:#141922; --surface-2:#1B222D;
+    --ink:#E7ECF3; --ink-soft:#C4CDDB; --muted:#93A0B4; --faint:#68748A;
+    --border:#242C39; --border-strong:#323C4C;
+    --accent:#5B8CFF; --accent-soft:#182742; --accent-ink:#A9C3FF;
+    --teal:#3AC6D0; --teal-soft:#122B2E;
+    --green:#4ADE80; --green-soft:#12301F;
+    --amber:#F0B44C; --amber-soft:#32260F;
+    --red:#F87171; --red-soft:#341717;
+    --purple:#A98BFF; --purple-soft:#221838;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 30px -14px rgba(0,0,0,.7);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased;font-feature-settings:"kern","liga"}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding-inline:20px}
+
+  /* ---------- top bar ---------- */
+  .topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:40;
+    background:color-mix(in srgb,var(--ground) 88%,transparent);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  .topbar .row{display:flex;align-items:center;gap:14px;justify-content:space-between;
+    max-width:var(--maxw);margin:0 auto;padding:10px 20px}
+  .brand{font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--muted);
+    display:flex;align-items:center;gap:9px}
+  .brand b{color:var(--ink)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  .progress{position:absolute;left:0;bottom:-1px;height:2px;background:var(--accent);width:0}
+  .theme-btn{font-family:var(--mono);font-size:12px;color:var(--muted);background:var(--surface);
+    border:1px solid var(--border);border-radius:8px;padding:6px 11px;cursor:pointer}
+  .theme-btn:hover{border-color:var(--border-strong);color:var(--ink)}
+
+  /* ---------- hero ---------- */
+  .hero{padding:64px 0 40px;border-bottom:1px solid var(--border);position:relative;overflow:hidden}
+  .hero .eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;margin-bottom:20px}
+  .hero h1{font-family:var(--disp);font-weight:800;letter-spacing:-.02em;line-height:1.02;
+    font-size:clamp(2.4rem,6vw,4.4rem);margin:0 0 20px;text-wrap:balance;max-width:16ch}
+  .hero p.lede{font-size:clamp(1.05rem,2.2vw,1.3rem);color:var(--ink-soft);max-width:60ch;margin:0 0 30px}
+  .hero .stats{display:flex;flex-wrap:wrap;gap:14px}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;box-shadow:var(--shadow)}
+  .stat .k{font-family:var(--mono);font-size:1.5rem;font-weight:600;color:var(--ink);line-height:1;font-variant-numeric:tabular-nums}
+  .stat .l{font-size:12.5px;color:var(--muted);margin-top:6px}
+  .grid-bg{position:absolute;inset:0;z-index:-1;opacity:.5;
+    background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);
+    background-size:38px 38px;mask-image:radial-gradient(circle at 78% 8%,#000,transparent 62%)}
+
+  /* ---------- layout ---------- */
+  .layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:52px;align-items:start;padding-block:44px}
+  nav.toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 68px);align-self:start;
+    max-height:calc(100vh - 100px);overflow:auto;font-size:13.5px;padding-right:6px}
+  nav.toc .tt{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 12px}
+  nav.toc ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+  nav.toc a{display:flex;gap:9px;text-decoration:none;color:var(--muted);padding:5px 9px;border-radius:7px;
+    border-left:2px solid transparent;line-height:1.35}
+  nav.toc a .num{font-family:var(--mono);color:var(--faint);font-size:12px;min-width:22px}
+  nav.toc a:hover{color:var(--ink);background:var(--surface-2)}
+  nav.toc a.active{color:var(--accent);background:var(--accent-soft);border-left-color:var(--accent);font-weight:600}
+  nav.toc a.active .num{color:var(--accent)}
+
+  main{min-width:0;max-width:var(--measure)}
+  section{scroll-margin-top:84px;margin-bottom:60px}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:10px}
+  h2{font-family:var(--disp);font-weight:700;letter-spacing:-.015em;font-size:clamp(1.7rem,3.6vw,2.3rem);
+    line-height:1.1;margin:0 0 8px;text-wrap:balance}
+  h3{font-family:var(--disp);font-weight:600;font-size:1.28rem;letter-spacing:-.01em;margin:34px 0 10px;line-height:1.2}
+  h4{font-family:var(--sans);font-weight:700;font-size:1.02rem;margin:22px 0 6px;color:var(--ink)}
+  p{margin:0 0 16px;color:var(--ink-soft)}
+  main a{color:var(--accent-ink);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px}
+  strong{color:var(--ink);font-weight:600}
+  em{color:var(--ink);font-style:italic}
+  ul,ol{margin:0 0 16px;padding-left:22px;color:var(--ink-soft)}
+  li{margin:6px 0}
+  li::marker{color:var(--faint)}
+  code{font-family:var(--mono);font-size:.86em;background:var(--surface-2);border:1px solid var(--border);
+    border-radius:5px;padding:1px 5px;color:var(--ink)}
+  .lead{font-size:1.12rem;color:var(--ink-soft)}
+
+  /* level badge */
+  .lvl{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;font-weight:600;
+    padding:4px 11px;border-radius:999px;letter-spacing:.03em;margin-bottom:14px}
+  .lvl b{font-weight:700}
+  .l-0{background:var(--surface-2);color:var(--muted)}
+  .l-1{background:var(--green-soft);color:var(--green)}
+  .l-2{background:var(--teal-soft);color:var(--teal)}
+  .l-3{background:var(--accent-soft);color:var(--accent-ink)}
+  .l-4{background:var(--purple-soft);color:var(--purple)}
+  .l-5{background:var(--amber-soft);color:var(--amber)}
+  .l-6{background:var(--red-soft);color:var(--red)}
+
+  /* callouts */
+  .note{border:1px solid var(--border);border-left:3px solid var(--accent);background:var(--surface);
+    border-radius:10px;padding:16px 18px;margin:22px 0;box-shadow:var(--shadow)}
+  .note .h{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+    font-weight:600;color:var(--accent);margin-bottom:6px}
+  .note.warn{border-left-color:var(--amber)} .note.warn .h{color:var(--amber)}
+  .note.gotcha{border-left-color:var(--red)} .note.gotcha .h{color:var(--red)}
+  .note p:last-child{margin-bottom:0}
+
+  /* tables */
+  .tbl{margin:22px 0;overflow-x:auto;border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow)}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:520px}
+  th,td{text-align:left;padding:11px 15px;border-bottom:1px solid var(--border);vertical-align:top}
+  thead th{background:var(--surface-2);font-family:var(--mono);font-size:11.5px;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--muted);font-weight:600}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:var(--surface-2)}
+  td b{color:var(--ink)}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+  /* diagrams */
+  figure{margin:26px 0;background:var(--surface);border:1px solid var(--border);border-radius:14px;
+    padding:22px 20px 14px;box-shadow:var(--shadow);overflow-x:auto}
+  figure svg{display:block;width:100%;height:auto;min-width:460px}
+  figcaption{font-size:12.5px;color:var(--muted);margin-top:12px;font-family:var(--mono);text-align:center}
+  .dg-box{fill:var(--surface);stroke:var(--border-strong);stroke-width:1.5}
+  .dg-accent{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.5}
+  .dg-teal{fill:var(--teal-soft);stroke:var(--teal);stroke-width:1.5}
+  .dg-amber{fill:var(--amber-soft);stroke:var(--amber);stroke-width:1.5}
+  .dg-purple{fill:var(--purple-soft);stroke:var(--purple);stroke-width:1.5}
+  .dg-green{fill:var(--green-soft);stroke:var(--green);stroke-width:1.5}
+  .dg-t{fill:var(--ink);font-family:var(--sans);font-size:13px;font-weight:600}
+  .dg-s{fill:var(--muted);font-family:var(--mono);font-size:11px}
+  .dg-line{stroke:var(--muted);stroke-width:1.5;fill:none}
+  .dg-line-a{stroke:var(--accent);stroke-width:2;fill:none}
+  .dg-dash{stroke:var(--faint);stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+
+  /* number cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:22px 0}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}
+  .card .big{font-family:var(--mono);font-size:1.6rem;font-weight:600;color:var(--accent);line-height:1;font-variant-numeric:tabular-nums}
+  .card .lab{font-weight:600;color:var(--ink);margin-top:9px;font-size:.95rem}
+  .card .sub{font-size:13px;color:var(--muted);margin-top:3px}
+
+  /* pill row */
+  .pills{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}
+  .pill{font-family:var(--mono);font-size:12px;padding:5px 11px;border-radius:8px;border:1px solid var(--border);
+    background:var(--surface);color:var(--muted)}
+  .pill b{color:var(--ink)}
+
+  .divider{height:1px;background:linear-gradient(90deg,var(--border),transparent);margin:0 0 44px}
+  footer{border-top:1px solid var(--border);padding:34px 0 60px;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;flex-direction:column;gap:8px}
+  footer b{color:var(--ink)}
+
+  @media (max-width:900px){
+    .layout{grid-template-columns:1fr;gap:0}
+    nav.toc{position:static;max-height:none;margin-bottom:26px;background:var(--surface);
+      border:1px solid var(--border);border-radius:12px;padding:14px}
+    nav.toc.collapsed ol{display:none}
+    main{max-width:none}
+  }
+  @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+  /* capability envelope */
+  .env{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:18px 0 10px}
+  .env-i{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--surface)}
+  .env-i span{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;margin-bottom:5px}
+  .env-i p{margin:0;font-size:13.5px;color:var(--ink-soft);line-height:1.5}
+  .env-i.good{border-left:3px solid var(--green)} .env-i.good span{color:var(--green)}
+  .env-i.bad{border-left:3px solid var(--red)} .env-i.bad span{color:var(--red)}
+  .env-i.warn{border-left:3px solid var(--amber)} .env-i.warn span{color:var(--amber)}
+  .env-i.fix{border-left:3px solid var(--accent)} .env-i.fix span{color:var(--accent)}
+  .threshold{display:flex;gap:12px;align-items:flex-start;background:var(--surface-2);
+    border:1px dashed var(--border-strong);border-radius:10px;padding:11px 15px;margin:14px 0 6px;font-size:13.5px;color:var(--ink-soft)}
+  .threshold b{color:var(--teal);font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
+    text-transform:uppercase;white-space:nowrap;padding-top:2px}
+  .gain{font-size:13.5px;color:var(--ink-soft);margin:2px 0 4px;padding-left:2px}
+  .gain b{color:var(--green);font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase}
+
+  /* code blocks */
+  .code{margin:18px 0;border:1px solid var(--border);border-radius:11px;overflow:hidden;box-shadow:var(--shadow)}
+  .code .fn{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--surface-2);
+    padding:8px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+  .code .fn::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--teal)}
+  pre{margin:0;background:var(--surface);padding:14px 16px;overflow-x:auto;font-size:12.7px;line-height:1.6}
+  pre code{background:none;border:none;padding:0;font-size:12.7px;color:var(--ink-soft);white-space:pre}
+  .cm{color:var(--faint);font-style:italic}
+  .ky{color:var(--purple)} .st{color:var(--green)} .nm{color:var(--amber)} .fnn{color:var(--accent-ink)}
+
+  /* tool grid */
+  .toolgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:20px 0}
+  .tool{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:14px 15px;box-shadow:var(--shadow)}
+  .tool .cat{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  .tool .nmz{font-weight:700;color:var(--ink);margin:6px 0 4px;font-size:.98rem}
+  .tool .d{font-size:13px;color:var(--muted);line-height:1.5}
+
+  /* numbered steps */
+  .steps{counter-reset:st;list-style:none;padding:0;margin:20px 0}
+  .steps li{counter-increment:st;position:relative;padding:0 0 16px 44px;margin:0}
+  .steps li::before{content:counter(st);position:absolute;left:0;top:-2px;width:30px;height:30px;
+    display:grid;place-items:center;border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);
+    font-family:var(--mono);font-weight:600;font-size:14px;border:1px solid var(--accent)}
+  .steps li b{color:var(--ink)}
+  .steps li:not(:last-child)::after{content:"";position:absolute;left:14px;top:32px;bottom:2px;width:1.5px;background:var(--border)}
+</style>
+
+<div class="topbar">
+  <div class="row">
+    <span class="brand"><span class="dot"></span><b>Chat at Planet Scale</b> — system design field guide</span>
+    <button class="theme-btn" id="themeBtn" aria-label="Toggle theme">◐ theme</button>
+  </div>
+  <div class="progress" id="progress"></div>
+</div>
+
+<header class="hero">
+  <div class="grid-bg"></div>
+  <div class="wrap">
+    <div class="eyebrow">System Design · Real-time · LLM Infrastructure</div>
+    <h1>From one server to a million messages a second.</h1>
+    <p class="lede">A ground-up field guide to designing a real-time chat application — the kind that starts as a weekend project and ends up looking like the web version of ChatGPT. We build it in layers, and every layer earns its complexity by solving a problem the previous one couldn't survive.</p>
+    <div class="stats">
+      <div class="stat"><div class="k">8</div><div class="l">scaling levels, L0 → L7</div></div>
+      <div class="stat"><div class="k">1M+</div><div class="l">target requests / second</div></div>
+      <div class="stat"><div class="k">6</div><div class="l">cross-cutting concerns</div></div>
+      <div class="stat"><div class="k">&lt;300ms</div><div class="l">target time-to-first-token</div></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<div class="layout">
+
+  <nav class="toc" id="toc">
+    <p class="tt">Contents</p>
+    <ol>
+      <li><a href="#framing"><span class="num">00</span><span>Framing &amp; requirements</span></a></li>
+      <li><a href="#estimation"><span class="num">01</span><span>Back-of-envelope math</span></a></li>
+      <li><a href="#l0"><span class="num">L0</span><span>The monolith</span></a></li>
+      <li><a href="#l1"><span class="num">L1</span><span>Stateless app + real DB</span></a></li>
+      <li><a href="#l2"><span class="num">L2</span><span>Real-time transport</span></a></li>
+      <li><a href="#l3"><span class="num">L3</span><span>Horizontal scale &amp; LB</span></a></li>
+      <li><a href="#l4"><span class="num">L4</span><span>The fan-out problem</span></a></li>
+      <li><a href="#l5"><span class="num">L5</span><span>Data at scale</span></a></li>
+      <li><a href="#l6"><span class="num">L6</span><span>The LLM inference layer</span></a></li>
+      <li><a href="#l7"><span class="num">L7</span><span>Going global</span></a></li>
+      <li><a href="#auth"><span class="num">02</span><span>Auth &amp; security</span></a></li>
+      <li><a href="#ratelimit"><span class="num">03</span><span>Rate limiting &amp; abuse</span></a></li>
+      <li><a href="#obs"><span class="num">04</span><span>Observability</span></a></li>
+      <li><a href="#deploy"><span class="num">05</span><span>Deployment &amp; release</span></a></li>
+      <li><a href="#cost"><span class="num">06</span><span>Cost &amp; capacity</span></a></li>
+      <li><a href="#failure"><span class="num">07</span><span>Failure &amp; resilience</span></a></li>
+      <li><a href="#measure"><span class="num">08</span><span>Measuring it for real</span></a></li>
+      <li><a href="#numbers"><span class="num">A</span><span>Numbers to know</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- ============ FRAMING ============ -->
+    <section id="framing">
+      <div class="kicker">Chapter 00</div>
+      <h2>Framing the problem before touching a keyboard</h2>
+      <p class="lead">Every good system design starts by refusing to design anything yet. The single most common failure in this exercise — in interviews and in real life — is jumping to WebSockets and Kafka before anyone has said what the system must actually <em>do</em>. So we pin down scope, then requirements, then the numbers.</p>
+
+      <p>"A chat application" hides at least three very different systems, and they scale in different ways. Be explicit about which you mean, because it changes almost every downstream decision.</p>
+
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Flavor</th><th>Example</th><th>Hardest part</th></tr></thead>
+          <tbody>
+            <tr><td><b>Human ↔ human</b></td><td>WhatsApp, Slack, Discord</td><td>Fan-out &amp; presence — one message to many connections, delivery guarantees, ordering</td></tr>
+            <tr><td><b>Human ↔ AI</b></td><td>ChatGPT, Claude web</td><td>The inference layer — GPU fleets, token streaming, batching, cost per request</td></tr>
+            <tr><td><b>Both</b></td><td>AI copilots inside team chat</td><td>All of the above, plus routing between the two paths</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Your goal — "something like the web version of ChatGPT" — is squarely the <strong>human ↔ AI</strong> case, but at planet scale it inherits nearly every hard problem of the human-to-human case too: millions of persistent connections, real-time streaming, presence, history, multi-region. So we build the general real-time substrate first (L0–L5, L7), then bolt on the part that makes it ChatGPT rather than Slack — the inference layer (L6).</p>
+
+      <h3>Functional requirements</h3>
+      <p>What the system must let a user do. Keep this list short and ruthless; everything you add here you must later scale.</p>
+      <ul>
+        <li>Send a message and get a streamed response, token by token, with low time-to-first-token.</li>
+        <li>Maintain <strong>conversations</strong> — ordered history, persisted, retrievable, editable/branchable.</li>
+        <li>Multi-device: start on a phone, continue on a laptop, see the same state.</li>
+        <li>Stop generation mid-stream; regenerate; edit a previous turn.</li>
+        <li>Attachments (images, files) and, later, multimodal in/out.</li>
+      </ul>
+
+      <h3>Non-functional requirements (the ones that actually cost money)</h3>
+      <p>These are the requirements you defend in design review. Attach a <em>number and a percentile</em> to each — "fast" is not a requirement, "p99 time-to-first-token &lt; 800ms" is.</p>
+      <div class="cards">
+        <div class="card"><div class="big">99.95%</div><div class="lab">Availability</div><div class="sub">≈ 4.4 hours downtime / year</div></div>
+        <div class="card"><div class="big">&lt;300ms</div><div class="lab">Time to first token</div><div class="sub">p50; p99 under ~1s</div></div>
+        <div class="card"><div class="big">Durable</div><div class="lab">Message persistence</div><div class="sub">a sent message is never lost</div></div>
+        <div class="card"><div class="big">Elastic</div><div class="lab">Scalability</div><div class="sub">scale out, not up; no single choke point</div></div>
+      </div>
+
+      <div class="note">
+        <div class="h">The tradeoff triangle</div>
+        <p>Latency, consistency, and cost pull against each other. Strong global consistency raises latency and cost; ultra-low latency usually means relaxing consistency (eventual delivery, at-least-once) and spending on redundancy. Every level below is really a decision about <em>where on this triangle</em> you're willing to sit for a given feature.</p>
+      </div>
+    </section>
+
+    <!-- ============ ESTIMATION ============ -->
+    <section id="estimation">
+      <div class="kicker">Chapter 01</div>
+      <h2>Back-of-the-envelope: what does "1M req/s" actually demand?</h2>
+      <p class="lead">Numbers turn hand-waving into engineering. Before designing, we size the system so every later choice has a target to hit. The point isn't precision — it's discovering the order of magnitude, and where the pain will be.</p>
+
+      <h3>Traffic assumptions</h3>
+      <p>Say we want a system that peaks at <strong>1,000,000 chat messages per second</strong>. We work outward from there.</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Quantity</th><th>Assumption</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>Peak message send rate</td><td>given</td><td class="mono">1,000,000 / s</td></tr>
+            <tr><td>Daily active users (DAU)</td><td>~20 msgs/user/day, peak = 5× average</td><td class="mono">~430M DAU</td></tr>
+            <tr><td>Concurrent open connections</td><td>~5% of DAU online at peak</td><td class="mono">~20M sockets</td></tr>
+            <tr><td>Connections per server</td><td>~100k WebSockets/box (tuned Linux)</td><td class="mono">~200 conn servers</td></tr>
+            <tr><td>Avg response length</td><td>~500 output tokens</td><td class="mono">—</td></tr>
+            <tr><td>Token generation load</td><td>1M req/s × 500 tok</td><td class="mono">5×10⁸ tok/s</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note warn">
+        <div class="h">Where the math breaks reality</div>
+        <p>That token rate is the number that separates "big web app" from "you now run one of the largest GPU fleets on Earth." At ~2,500 output tokens/sec per high-end GPU with good batching, 5×10⁸ tok/s implies on the order of <strong>hundreds of thousands of GPUs</strong> for generation alone. This is why <em>no real product is uniformly at 1M req/s of LLM inference</em> — it would cost billions per year. The realistic target is a system whose <em>architecture</em> scales to that shape, provisioned to actual demand. We design for the shape; we pay for the load.</p>
+      </div>
+
+      <h3>Storage sizing</h3>
+      <p>Each message ≈ 1 KB of text + metadata. At 1M/s that's ~1 GB/s of raw writes, ~86 TB/day, ~31 PB/year before replication and indexes. This immediately kills any single-database design and forces sharding (L5). It also tells you cold storage tiering isn't optional — most conversations are read once and never again.</p>
+
+      <h3>Bandwidth</h3>
+      <p>Streaming 500 tokens as ~4 chars each over SSE/WebSocket framing ≈ a few KB per response. At 1M/s that's single-digit GB/s egress from the app tier — meaningful, but dwarfed by media attachments. Images/files, not text, dominate your CDN and egress bill.</p>
+
+      <div class="cards">
+        <div class="card"><div class="big">~200</div><div class="lab">Connection servers</div><div class="sub">to hold 20M sockets</div></div>
+        <div class="card"><div class="big">~31 PB/yr</div><div class="lab">Message storage</div><div class="sub">pre-replication</div></div>
+        <div class="card"><div class="big">10⁵–10⁶</div><div class="lab">GPUs (at full 1M/s)</div><div class="sub">inference dominates cost</div></div>
+        <div class="card"><div class="big">few GB/s</div><div class="lab">Text egress</div><div class="sub">media dwarfs it</div></div>
+      </div>
+      <p>These four numbers are your compass. Notice the asymmetry: connections and storage are a <em>solved, cheap</em> problem at this scale; <strong>GPU inference is the cost center</strong>. That reshapes the whole project — most of the interesting engineering in an LLM chat product is spent making each GPU-second go further.</p>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ============ L0 ============ -->
+    <section id="l0">
+      <span class="lvl l-0"><b>L0</b> · The monolith</span>
+      <h2>One box, one process, and a to-do app with delusions</h2>
+      <p class="lead">Every system starts here, and you should be able to draw it in ten seconds. A single server runs the web app, the business logic, and an embedded or co-located database. It handles maybe hundreds of concurrent users. This is not an embarrassment — it's the correct starting point, and it defines the contract every later level must preserve.</p>
+
+      <figure>
+        <svg viewBox="0 0 640 210" role="img" aria-label="Client to single server to database">
+          <rect class="dg-box" x="20" y="80" width="120" height="52" rx="10"/>
+          <text class="dg-t" x="80" y="103" text-anchor="middle">Browser</text>
+          <text class="dg-s" x="80" y="120" text-anchor="middle">HTTP</text>
+          <path class="dg-line-a" d="M144 106 H236" marker-end="url(#ar)"/>
+          <rect class="dg-accent" x="240" y="60" width="180" height="92" rx="12"/>
+          <text class="dg-t" x="330" y="92" text-anchor="middle">App server</text>
+          <text class="dg-s" x="330" y="110" text-anchor="middle">web + logic + auth</text>
+          <text class="dg-s" x="330" y="126" text-anchor="middle">(one process)</text>
+          <path class="dg-line-a" d="M424 106 H516" marker-end="url(#ar)"/>
+          <rect class="dg-box" x="520" y="72" width="104" height="68" rx="10"/>
+          <text class="dg-t" x="572" y="100" text-anchor="middle">Database</text>
+          <text class="dg-s" x="572" y="118" text-anchor="middle">Postgres</text>
+          <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="var(--accent)"/></marker></defs>
+        </svg>
+        <figcaption>L0 — the whole system fits in one request/response and one SQL query.</figcaption>
+      </figure>
+
+      <h3>The data model that survives forever</h3>
+      <p>Get this right and it barely changes through every later level. Three core entities:</p>
+      <ul>
+        <li><code>users</code> — id, auth identity, profile.</li>
+        <li><code>conversations</code> — id, owner, title, created_at. (In group chat: a <code>channels</code>/<code>rooms</code> table plus a membership join table.)</li>
+        <li><code>messages</code> — id, conversation_id, author (user or "assistant"), content, created_at, and a <strong>monotonic sequence number</strong> scoped to the conversation.</li>
+      </ul>
+      <div class="note">
+        <div class="h">Design once, keep forever</div>
+        <p>The per-conversation <strong>sequence number</strong> is the most important early decision. It gives you stable ordering independent of wall-clock time (clocks skew across servers), enables "give me everything after message N" sync, and becomes the anchor for pagination, read receipts, and conflict resolution later. Add it at L0 even though you don't need it yet.</p>
+      </div>
+
+      <h3>Why you leave L0</h3>
+      <p>The moment two things are true — you can't afford downtime for deploys, and one machine can't hold the load — L0 is finished. Not before. Premature distribution is how projects die of complexity before they ever get users.</p>
+
+      <h3>Capability envelope</h3>
+      <div class="env">
+        <div class="env-i good"><span>Handles</span><p>~hundreds to ~1,000 concurrent users; a few hundred req/s of light CRUD on one well-tuned box.</p></div>
+        <div class="env-i bad"><span>Breaks when</span><p>Traffic saturates the box, <em>or</em> you can no longer accept downtime for deploys/restarts. A single crash = total outage.</p></div>
+        <div class="env-i warn"><span>Can't do</span><p>High availability, zero-downtime deploys, horizontal scale, or real server-push at scale. App and DB fight for the same CPU/RAM.</p></div>
+        <div class="env-i fix"><span>Improve in place first</span><p>Vertical scale (bigger box), DB indexes, connection pooling, a query cache, gzip. Squeeze this before distributing anything.</p></div>
+      </div>
+      <div class="threshold"><b>Trigger → L1</b><span>You need to deploy or restart without dropping users, or one machine is the bottleneck.</span></div>
+    </section>
+
+    <!-- ============ L1 ============ -->
+    <section id="l1">
+      <span class="lvl l-1"><b>L1</b> · Stateless app + real database</span>
+      <h2>Split the tiers so you can restart without fear</h2>
+      <p class="lead">The first real architectural move isn't adding servers — it's making one server <em>replaceable</em>. We separate the stateless application tier from the stateful data tier, and we push all session state out of process. Now any app instance can die or deploy without losing anything.</p>
+
+      <h3>The golden rule: app servers hold no state</h3>
+      <p>No user sessions in memory, no uploaded files on local disk, no "sticky" anything (yet). Everything that must survive a restart lives in a shared, external system:</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>State</th><th>Where it goes</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td>Session / auth</td><td>Signed token (JWT) or Redis session store</td><td>Any server can validate any request</td></tr>
+            <tr><td>Messages &amp; conversations</td><td>Primary database</td><td>Durability, shared read/write</td></tr>
+            <tr><td>Uploaded files</td><td>Object storage (S3 / GCS)</td><td>Local disk dies with the box</td></tr>
+            <tr><td>Hot lookups, counters</td><td>Redis / Memcached</td><td>Offload the DB, sub-ms reads</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Read scaling: replicas and cache</h3>
+      <p>Chat is read-heavy (you re-open conversations far more than you send). Two cheap wins before any hard sharding:</p>
+      <ul>
+        <li><strong>Read replicas</strong> — the primary handles writes; replicas serve reads. Beware <em>replication lag</em>: a user who just sent a message may hit a replica that hasn't seen it. Fix with "read-your-writes" routing (send that user's reads to the primary briefly) or read from cache.</li>
+        <li><strong>Cache-aside</strong> — recent messages and conversation lists in Redis. On write, update the DB then invalidate/update the cache. This is where <em>cache invalidation</em> — famously one of the two hard problems — starts to bite.</li>
+      </ul>
+
+      <div class="note gotcha">
+        <div class="h">Gotcha: the dual-write trap</div>
+        <p>Writing to the database <em>and</em> the cache (or search index, or another service) in the same request is a distributed transaction in disguise. If the second write fails, your systems disagree. Prefer a single source of truth plus asynchronous propagation — write to the DB, emit an event, let consumers update caches/indexes. This "log then derive" pattern (Change Data Capture) reappears everywhere at scale.</p>
+      </div>
+
+      <figure>
+        <svg viewBox="0 0 660 250" role="img" aria-label="Stateless app tier over shared state">
+          <rect class="dg-box" x="16" y="104" width="92" height="42" rx="9"/><text class="dg-t" x="62" y="130" text-anchor="middle">Clients</text>
+          <rect class="dg-accent" x="150" y="60" width="120" height="40" rx="9"/><text class="dg-t" x="210" y="85" text-anchor="middle">App #1</text>
+          <rect class="dg-accent" x="150" y="112" width="120" height="40" rx="9"/><text class="dg-t" x="210" y="137" text-anchor="middle">App #2</text>
+          <rect class="dg-accent" x="150" y="164" width="120" height="40" rx="9"/><text class="dg-t" x="210" y="189" text-anchor="middle">App #3 (stateless)</text>
+          <rect class="dg-box" x="330" y="14" width="150" height="40" rx="9"/><text class="dg-t" x="405" y="39" text-anchor="middle">Redis cache</text>
+          <rect class="dg-box" x="330" y="66" width="150" height="40" rx="9"/><text class="dg-t" x="405" y="91" text-anchor="middle">Object store (S3)</text>
+          <rect class="dg-teal" x="520" y="150" width="124" height="50" rx="10"/><text class="dg-t" x="582" y="172" text-anchor="middle">DB primary</text><text class="dg-s" x="582" y="189" text-anchor="middle">writes</text>
+          <rect class="dg-box" x="520" y="90" width="124" height="40" rx="9"/><text class="dg-t" x="582" y="115" text-anchor="middle">Read replicas</text>
+          <path class="dg-line-a" d="M108 125 H148" marker-end="url(#ar1b)"/>
+          <path class="dg-dash" d="M270 80 H328"/><path class="dg-dash" d="M270 132 H328"/>
+          <path class="dg-line" d="M480 100 L518 108" marker-end="url(#ar1b)"/>
+          <path class="dg-line-a" d="M480 130 L518 168" marker-end="url(#ar1b)"/>
+          <path class="dg-dash" d="M582 148 V132" marker-end="url(#ar1b)"/><text class="dg-s" x="600" y="144">replicate</text>
+          <defs><marker id="ar1b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="var(--accent)"/></marker></defs>
+        </svg>
+        <figcaption>L1 — interchangeable app instances; every piece of state lives in a shared external system. Reads fan out to replicas/cache; writes go to the primary.</figcaption>
+      </figure>
+
+      <h3>Capability envelope</h3>
+      <div class="env">
+        <div class="env-i good"><span>Handles</span><p>~tens of thousands of users; reads scale wide via replicas + cache. Deploys are now safe — instances are disposable.</p></div>
+        <div class="env-i bad"><span>Breaks when</span><p>Write volume hits the single primary's ceiling (~a few thousand writes/s), or replication lag makes reads visibly stale.</p></div>
+        <div class="env-i warn"><span>Can't do</span><p>Real-time server push (still request/response), one write master, cache-invalidation correctness gets fiddly.</p></div>
+        <div class="env-i fix"><span>Improve in place first</span><p>Read replicas, cache-aside, CDN for assets, PgBouncer pooling, read-your-writes routing, bigger primary.</p></div>
+      </div>
+      <div class="gain"><b>Gain over L0</b> High availability and zero-downtime deploys — the app tier is now cattle, not a pet.</div>
+      <div class="threshold"><b>Trigger → L2</b><span>You need the server to <em>push</em> — stream an answer token-by-token, or deliver a message the instant it arrives.</span></div>
+    </section>
+
+    <!-- ============ L2 ============ -->
+    <section id="l2">
+      <span class="lvl l-2"><b>L2</b> · Real-time transport</span>
+      <h2>How does the server push, instead of the client asking?</h2>
+      <p class="lead">HTTP is a client-asks / server-answers protocol. Chat needs the opposite: the server must push a new message — or the next streamed token — the instant it exists. This is the defining technical choice of any chat system, and for LLM chat specifically it's the difference between watching an answer appear word by word and staring at a spinner.</p>
+
+      <h3>The four transports, from worst to best fit</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Technique</th><th>How</th><th>Good for</th><th>Cost</th></tr></thead>
+          <tbody>
+            <tr><td><b>Short polling</b></td><td>Client asks "anything new?" every N seconds</td><td>Prototypes only</td><td>Wasteful, laggy, hammers the DB</td></tr>
+            <tr><td><b>Long polling</b></td><td>Server holds the request open until there's data</td><td>Fallback path</td><td>Connection churn, awkward</td></tr>
+            <tr><td><b>SSE</b> (Server-Sent Events)</td><td>One long-lived HTTP stream, server → client only</td><td><b>LLM token streaming</b></td><td>One-directional; simple, HTTP-native, auto-reconnect</td></tr>
+            <tr><td><b>WebSocket</b></td><td>Full-duplex persistent TCP connection</td><td>Group chat, presence, typing</td><td>Stateful; needs its own infra</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <div class="h">The choice ChatGPT-style products actually make</div>
+        <p>For a <em>human ↔ AI</em> product, the dominant real-time need is streaming one long answer from server to client — which is exactly what <strong>SSE</strong> was built for. It rides on plain HTTP/2, passes through proxies and load balancers cleanly, reconnects automatically, and needs no special socket infrastructure. Many LLM chat frontends use SSE for the response stream and ordinary HTTP POST to send the prompt. WebSockets earn their keep once you add bidirectional, low-latency features (multi-user rooms, presence, collaborative editing). Plenty of large systems run <strong>both</strong>: SSE for the AI stream, WebSockets for interactive/social features.</p>
+      </div>
+
+      <h3>Token streaming, concretely</h3>
+      <p>The user POSTs a prompt. The server opens an SSE stream, calls the model, and forwards each generated token as an event the moment it arrives. The frontend appends tokens to the bubble as they land. Key details that make it feel good:</p>
+      <ul>
+        <li><strong>Flush immediately</strong> — disable response buffering (Nginx <code>proxy_buffering off</code>) or tokens arrive in clumps.</li>
+        <li><strong>Heartbeats</strong> — send a comment/ping every ~15s so intermediaries don't kill an "idle" stream.</li>
+        <li><strong>Cancellation</strong> — when the user hits Stop, the client aborts the request; the server must propagate that to the model to free the GPU. Un-cancelled streams are pure wasted money.</li>
+        <li><strong>Resumability</strong> — include a stream/message id and last-event-id so a dropped connection can resume rather than restart the (expensive) generation.</li>
+      </ul>
+
+      <figure>
+        <svg viewBox="0 0 640 200" role="img" aria-label="SSE token streaming timeline">
+          <rect class="dg-box" x="20" y="30" width="110" height="40" rx="9"/>
+          <text class="dg-t" x="75" y="55" text-anchor="middle">Client</text>
+          <rect class="dg-accent" x="20" y="140" width="110" height="40" rx="9"/>
+          <text class="dg-t" x="75" y="165" text-anchor="middle">Server</text>
+          <path class="dg-line" d="M130 50 L520 50"/>
+          <path class="dg-line" d="M130 160 L520 160"/>
+          <path class="dg-line-a" d="M132 62 L500 150" marker-end="url(#ar2)"/>
+          <text class="dg-s" x="250" y="98">POST /chat  (prompt)</text>
+          <path class="dg-line-a" d="M500 150 L200 62" marker-end="url(#ar2)"/>
+          <text class="dg-s" x="205" y="128">SSE: "The" "capital" "of"...</text>
+          <text class="dg-s" x="360" y="128">(one event per token)</text>
+          <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="var(--accent)"/></marker></defs>
+        </svg>
+        <figcaption>L2 — prompt in over HTTP POST, answer out over an SSE stream, token by token.</figcaption>
+      </figure>
+
+      <h3>Capability envelope</h3>
+      <div class="env">
+        <div class="env-i good"><span>Handles</span><p>Real-time streaming to thousands of concurrent open streams on a single connection-capable server; feels instant.</p></div>
+        <div class="env-i bad"><span>Breaks when</span><p>One box hits its socket/CPU/file-descriptor ceiling, or a deploy drops every live stream at once.</p></div>
+        <div class="env-i warn"><span>Can't do</span><p>Deliver between users on <em>different</em> servers (there's only one here), or survive that server dying.</p></div>
+        <div class="env-i fix"><span>Improve in place first</span><p>Raise OS limits (fds, ephemeral ports, TCP backlog), disable proxy buffering, add heartbeats, compression, backpressure.</p></div>
+      </div>
+      <div class="gain"><b>Gain over L1</b> The server can push — token streaming and instant delivery become possible.</div>
+      <div class="threshold"><b>Trigger → L3</b><span>One server can't hold all the connections/load; you need a fleet behind one address.</span></div>
+    </section>
+
+    <!-- ============ L3 ============ -->
+    <section id="l3">
+      <span class="lvl l-3"><b>L3</b> · Horizontal scale &amp; load balancing</span>
+      <h2>Many app servers behind one address</h2>
+      <p class="lead">One box can't hold the load, so we run many identical stateless app servers and put a load balancer in front. Simple in principle — but persistent connections (SSE/WebSocket) break several assumptions that request/response load balancing takes for granted.</p>
+
+      <h3>Layers of load balancing</h3>
+      <ul>
+        <li><strong>DNS / anycast</strong> — spreads users across regions and edge points of presence.</li>
+        <li><strong>L4 (transport) LB</strong> — routes by IP/port, cheap, connection-aware; good for raw TCP/WebSocket throughput.</li>
+        <li><strong>L7 (application) LB</strong> — understands HTTP: path routing, TLS termination, retries, header-based routing. Where most policy lives.</li>
+      </ul>
+      <p>Common algorithms: round-robin (default), least-connections (better for long-lived sockets — you want to avoid piling new connections on a box that's already saturated), and consistent hashing (route a given key to a stable server; crucial at L4).</p>
+
+      <div class="note warn">
+        <div class="h">The persistent-connection problem</div>
+        <p>A WebSocket lives for minutes or hours. Standard load balancing assumes short requests it can freely re-route; here it can't. Three consequences: (1) <strong>connection draining</strong> — during a deploy you must let existing sockets finish or migrate rather than hard-cutting them; (2) <strong>imbalance</strong> — least-connections matters far more than round-robin; (3) the server holding your socket is now, temporarily, <em>stateful about you</em> — it knows you're connected. That last point is the whole reason L4 exists.</p>
+      </div>
+
+      <h3>Sticky sessions: a tempting trap</h3>
+      <p>You <em>can</em> pin a user to one server ("sticky sessions" via a cookie or IP hash). It makes local caching easy — and it makes deploys, failures, and rebalancing painful, because that server now holds irreplaceable state. The modern preference: keep app servers stateless and solve "which server holds this user's socket?" with a shared registry, not stickiness. That question — routing a message to the right connection when connections are spread across 200 servers — is exactly what the next level exists to answer.</p>
+
+      <figure>
+        <svg viewBox="0 0 640 240" role="img" aria-label="Load balancer fronting an app fleet">
+          <rect class="dg-box" x="16" y="100" width="86" height="42" rx="9"/><text class="dg-t" x="59" y="126" text-anchor="middle">Clients</text>
+          <rect class="dg-teal" x="140" y="94" width="120" height="54" rx="11"/><text class="dg-t" x="200" y="116" text-anchor="middle">L7 LB</text><text class="dg-s" x="200" y="133" text-anchor="middle">TLS · health · retry</text>
+          <rect class="dg-accent" x="330" y="18" width="130" height="38" rx="9"/><text class="dg-t" x="395" y="42" text-anchor="middle">App server 1</text>
+          <rect class="dg-accent" x="330" y="66" width="130" height="38" rx="9"/><text class="dg-t" x="395" y="90" text-anchor="middle">App server 2</text>
+          <rect class="dg-accent" x="330" y="114" width="130" height="38" rx="9"/><text class="dg-t" x="395" y="138" text-anchor="middle">App server 3</text>
+          <rect class="dg-accent" x="330" y="162" width="130" height="38" rx="9"/><text class="dg-t" x="395" y="186" text-anchor="middle">…server N</text>
+          <rect class="dg-box" x="510" y="94" width="114" height="54" rx="10"/><text class="dg-t" x="567" y="116" text-anchor="middle">Shared</text><text class="dg-s" x="567" y="133" text-anchor="middle">DB · cache</text>
+          <path class="dg-line-a" d="M102 121 H138" marker-end="url(#ar3b)"/>
+          <path class="dg-line" d="M260 118 L328 37" marker-end="url(#ar3b)"/>
+          <path class="dg-line" d="M260 120 L328 85" marker-end="url(#ar3b)"/>
+          <path class="dg-line" d="M260 122 L328 133" marker-end="url(#ar3b)"/>
+          <path class="dg-line" d="M260 124 L328 181" marker-end="url(#ar3b)"/>
+          <path class="dg-dash" d="M460 133 H508"/>
+          <text class="dg-s" x="250" y="70">least-conn</text>
+          <defs><marker id="ar3b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="var(--accent)"/></marker></defs>
+        </svg>
+        <figcaption>L3 — one address, many identical stateless servers. The LB spreads load; every server reaches the same shared state.</figcaption>
+      </figure>
+
+      <h3>Capability envelope</h3>
+      <div class="env">
+        <div class="env-i good"><span>Handles</span><p>~100k–1M+ concurrent connections across the fleet (~100k/box × N); horizontal scale for stateless work.</p></div>
+        <div class="env-i bad"><span>Breaks when</span><p>Two users on different servers must talk — no server can reach another's sockets. Deploys risk mass disconnects.</p></div>
+        <div class="env-i warn"><span>Can't do</span><p>Cross-server message delivery, multi-device sync, or presence — every server is an island.</p></div>
+        <div class="env-i fix"><span>Improve in place first</span><p>Least-connections balancing, connection draining, autoscaling on connection count, health checks, jittered reconnect.</p></div>
+      </div>
+      <div class="gain"><b>Gain over L2</b> Capacity scales by adding boxes; no single server is a ceiling anymore.</div>
+      <div class="threshold"><b>Trigger → L4</b><span>Any feature that spans servers — group chat, multi-device, presence — needs cross-server delivery.</span></div>
+    </section>
+
+    <!-- ============ L4 ============ -->
+    <section id="l4">
+      <span class="lvl l-4"><b>L4</b> · The fan-out problem</span>
+      <h2>The hardest problem in real-time chat</h2>
+      <p class="lead">Alice's socket is on connection-server 7. Bob's is on server 142. Alice sends a message to a room Bob is in. Server 7 received it — but server 7 has no TCP connection to Bob. How does the message cross the gap? This routing problem, at millions of connections, is the core of every real-time chat backend.</p>
+
+      <h3>The architecture: connection tier + pub/sub backbone</h3>
+      <p>Split the app tier in two. <strong>Connection servers</strong> (a.k.a. gateway / edge) do exactly one job: hold sockets and shuttle bytes. Behind them, a <strong>pub/sub or message backbone</strong> decouples "who received it" from "who needs it."</p>
+
+      <figure>
+        <svg viewBox="0 0 660 320" role="img" aria-label="Fan-out via pub/sub backbone">
+          <rect class="dg-box" x="20" y="20" width="96" height="38" rx="9"/><text class="dg-t" x="68" y="44" text-anchor="middle">Alice</text>
+          <rect class="dg-box" x="20" y="262" width="96" height="38" rx="9"/><text class="dg-t" x="68" y="286" text-anchor="middle">Bob</text>
+
+          <rect class="dg-accent" x="170" y="20" width="120" height="52" rx="10"/><text class="dg-t" x="230" y="42" text-anchor="middle">Conn-srv 7</text><text class="dg-s" x="230" y="59" text-anchor="middle">holds Alice</text>
+          <rect class="dg-accent" x="170" y="248" width="120" height="52" rx="10"/><text class="dg-t" x="230" y="270" text-anchor="middle">Conn-srv 142</text><text class="dg-s" x="230" y="287" text-anchor="middle">holds Bob</text>
+
+          <rect class="dg-purple" x="360" y="120" width="150" height="80" rx="12"/><text class="dg-t" x="435" y="150" text-anchor="middle">Pub/Sub</text><text class="dg-s" x="435" y="168" text-anchor="middle">Redis / Kafka</text><text class="dg-s" x="435" y="184" text-anchor="middle">channel per room</text>
+
+          <rect class="dg-box" x="560" y="130" width="86" height="60" rx="10"/><text class="dg-t" x="603" y="156" text-anchor="middle">DB</text><text class="dg-s" x="603" y="174" text-anchor="middle">persist</text>
+
+          <path class="dg-line-a" d="M116 39 H166" marker-end="url(#ar3)"/>
+          <path class="dg-line-a" d="M290 52 L358 128" marker-end="url(#ar3)"/>
+          <text class="dg-s" x="300" y="98">publish</text>
+          <path class="dg-line-a" d="M360 172 L292 262" marker-end="url(#ar3)"/>
+          <text class="dg-s" x="300" y="228">deliver</text>
+          <path class="dg-line-a" d="M290 281 H166" marker-end="url(#ar3)"/>
+          <path class="dg-dash" d="M510 160 H558"/>
+          <defs><marker id="ar3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="var(--accent)"/></marker></defs>
+        </svg>
+        <figcaption>L4 — server 7 publishes to the room's channel; the backbone delivers to server 142, which owns Bob's socket. Persistence happens in parallel.</figcaption>
+      </figure>
+
+      <h3>How the message finds Bob</h3>
+      <ol>
+        <li>Server 7 receives Alice's message, assigns it a sequence number, and <strong>persists</strong> it (durability first).</li>
+        <li>Server 7 <strong>publishes</strong> it to the channel for that room/conversation.</li>
+        <li>Every connection server subscribed to that channel — including 142 — receives it.</li>
+        <li>Server 142 looks up its <em>local</em> table of "which of my sockets belong to this room" and writes the bytes to Bob.</li>
+      </ol>
+      <p>No server needs to know the global map of every socket. Each knows only its own sockets plus which channels to subscribe to. The backbone does the crossing.</p>
+
+      <h3>Redis Pub/Sub vs. a real message queue</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th></th><th>Redis Pub/Sub</th><th>Kafka / log-based queue</th></tr></thead>
+          <tbody>
+            <tr><td>Delivery</td><td>Fire-and-forget (at-most-once)</td><td>Durable, replayable (at-least-once)</td></tr>
+            <tr><td>If a consumer is down</td><td>Message is <b>lost</b></td><td>Read it later from the log</td></tr>
+            <tr><td>Latency</td><td>Sub-millisecond</td><td>Low, but higher than Redis</td></tr>
+            <tr><td>Use it for</td><td>Live fan-out to online sockets</td><td>Durable pipeline, async workers, CDC, analytics</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note">
+        <div class="h">Real systems use both</div>
+        <p>A common pattern: <strong>persist to the DB</strong> (source of truth) → <strong>publish to Redis</strong> for instant delivery to online users → <strong>also write to a durable log/queue</strong> for offline delivery, push notifications, search indexing, and analytics. Online users get sub-ms delivery; offline users get the message on reconnect via a "give me everything after sequence N" sync against the DB. This is why the sequence number from L0 matters so much.</p>
+      </div>
+
+      <h3>Presence and the "which server holds this socket?" registry</h3>
+      <p>Presence (who's online, typing indicators, read receipts) is deceptively expensive — it's high-write, low-value-per-write, and fans out constantly. Keep it in a fast ephemeral store (Redis with TTLs), debounce updates, and never persist typing indicators. A connection registry (user → connection server) also lives here, refreshed by heartbeats so dead servers' entries expire automatically.</p>
+
+      <h3>Capability envelope</h3>
+      <div class="env">
+        <div class="env-i good"><span>Handles</span><p>Millions of connections with correct cross-server delivery, group fan-out, multi-device sync, and presence.</p></div>
+        <div class="env-i bad"><span>Breaks when</span><p>A hot channel overwhelms the backbone, or plain Redis pub/sub drops messages for a briefly-down consumer.</p></div>
+        <div class="env-i warn"><span>Can't do</span><p>Durably store PB-scale history on the backbone, or guarantee offline delivery without the DB behind it.</p></div>
+        <div class="env-i fix"><span>Improve in place first</span><p>Hybrid path (persist → Redis → durable log), channel sharding, presence debounce, at-least-once + dedup by message id.</p></div>
+      </div>
+      <div class="gain"><b>Gain over L3</b> Any user reaches any other user regardless of which server holds their socket — real chat is now possible.</div>
+      <div class="threshold"><b>Trigger → L5</b><span>The single database can't hold the write throughput or the petabytes of accumulating history.</span></div>
+    </section>
+
+    <!-- ============ L5 ============ -->
+    <section id="l5">
+      <span class="lvl l-5"><b>L5</b> · Data at scale</span>
+      <h2>When one database is no longer a database</h2>
+      <p class="lead">At 31 PB/year and 1 GB/s of writes, a single primary is impossible. We shard. But <em>how</em> you shard determines which queries stay fast and which become distributed nightmares — so we pick the shard key by studying the access pattern, not the data.</p>
+
+      <h3>Choosing the shard key</h3>
+      <p>Chat's dominant access pattern is "load all messages in <em>this conversation</em>, in order." So shard by <code>conversation_id</code>. Every message in a conversation lives on one shard; loading a conversation hits exactly one shard; the sequence number gives order within it. Sharding by <code>user_id</code> instead would scatter a group conversation's messages across many shards — a fan-in read on every open.</p>
+
+      <div class="note gotcha">
+        <div class="h">Gotcha: hot partitions</div>
+        <p>A viral group, a celebrity's channel, or a runaway AI agent can make one shard take vastly more traffic than the rest — a "hot partition." Consistent-hash sharding alone won't save you. Mitigations: split the hot conversation across sub-shards by time window, add a caching layer in front, and rate-limit pathological producers. Design for the assumption that load is <em>never</em> uniform.</p>
+      </div>
+
+      <h3>Right database for the right job (polyglot persistence)</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Data</th><th>Store</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td>Messages (append-heavy, time-ordered)</td><td>Cassandra / ScyllaDB / DynamoDB</td><td>Wide-column, linear write scaling, tunable consistency, TTL for tiering</td></tr>
+            <tr><td>Users, conversations, billing</td><td>Postgres / sharded relational</td><td>Transactions, relations, correctness</td></tr>
+            <tr><td>Hot cache, presence, counters</td><td>Redis</td><td>Sub-ms, ephemeral</td></tr>
+            <tr><td>Full-text / semantic search</td><td>Elasticsearch / vector DB</td><td>Search over history; retrieval for AI context</td></tr>
+            <tr><td>Attachments</td><td>Object storage + CDN</td><td>Cheap, durable, edge-cached</td></tr>
+            <tr><td>Event pipeline</td><td>Kafka</td><td>CDC, analytics, async work</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Hot vs. cold: tier aggressively</h3>
+      <p>Access to message history is extremely skewed — recent messages are read constantly, old ones almost never. Keep the last ~30 days in the fast tier; age the rest to cheaper columnar/cold storage. For an AI product this also feeds <strong>retrieval</strong>: long conversations and knowledge bases are embedded into a vector store so the model can pull relevant context without stuffing everything into the prompt.</p>
+
+      <figure>
+        <svg viewBox="0 0 640 240" role="img" aria-label="Sharded data tier with routing">
+          <rect class="dg-box" x="16" y="98" width="90" height="44" rx="9"/><text class="dg-t" x="61" y="124" text-anchor="middle">App tier</text>
+          <rect class="dg-teal" x="140" y="92" width="118" height="56" rx="11"/><text class="dg-t" x="199" y="114" text-anchor="middle">Shard router</text><text class="dg-s" x="199" y="131" text-anchor="middle">hash(conv_id)</text>
+          <rect class="dg-amber" x="320" y="14" width="150" height="40" rx="9"/><text class="dg-t" x="395" y="38" text-anchor="middle">Shard A · conv 0–N</text>
+          <rect class="dg-amber" x="320" y="62" width="150" height="40" rx="9"/><text class="dg-t" x="395" y="86" text-anchor="middle">Shard B · conv N–2N</text>
+          <rect class="dg-amber" x="320" y="110" width="150" height="40" rx="9"/><text class="dg-t" x="395" y="134" text-anchor="middle">Shard C · conv 2N–3N</text>
+          <rect class="dg-box" x="320" y="170" width="150" height="40" rx="9"/><text class="dg-t" x="395" y="194" text-anchor="middle">Vector DB · search</text>
+          <rect class="dg-box" x="510" y="86" width="114" height="40" rx="9"/><text class="dg-t" x="567" y="110" text-anchor="middle">Cold store</text>
+          <path class="dg-line-a" d="M106 120 H138" marker-end="url(#ar5b)"/>
+          <path class="dg-line" d="M258 116 L318 34" marker-end="url(#ar5b)"/>
+          <path class="dg-line" d="M258 118 L318 82" marker-end="url(#ar5b)"/>
+          <path class="dg-line" d="M258 120 L318 130" marker-end="url(#ar5b)"/>
+          <path class="dg-line" d="M258 128 L318 190" marker-end="url(#ar5b)"/>
+          <path class="dg-dash" d="M470 100 L508 106"/><text class="dg-s" x="486" y="90">age out</text>
+          <defs><marker id="ar5b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="var(--accent)"/></marker></defs>
+        </svg>
+        <figcaption>L5 — the router hashes conversation_id to a shard, so each conversation lives whole on one shard. Old data ages to cold storage; a vector DB serves search &amp; retrieval.</figcaption>
+      </figure>
+
+      <h3>Capability envelope</h3>
+      <div class="env">
+        <div class="env-i good"><span>Handles</span><p>PB-scale storage and ~1 GB/s of writes via horizontal sharding; the right store for each data shape.</p></div>
+        <div class="env-i bad"><span>Breaks when</span><p>A hot partition (viral room, runaway agent) overwhelms one shard while the rest sit idle.</p></div>
+        <div class="env-i warn"><span>Can't do</span><p>Cheap strong global consistency, easy cross-shard transactions, or painless rebalancing.</p></div>
+        <div class="env-i fix"><span>Improve in place first</span><p>Shard by conversation_id, sub-shard hot keys by time window, cache in front, hot/cold tiering, CDC pipeline.</p></div>
+      </div>
+      <div class="gain"><b>Gain over L4</b> Storage and write throughput scale linearly — history is no longer a ceiling.</div>
+      <div class="threshold"><b>Trigger → L6</b><span>You add AI generation — now the bottleneck moves from data to GPUs.</span></div>
+    </section>
+
+    <!-- ============ L6 ============ -->
+    <section id="l6">
+      <span class="lvl l-6"><b>L6</b> · The LLM inference layer</span>
+      <h2>The part that makes it ChatGPT, not Slack</h2>
+      <p class="lead">Everything so far applies to any real-time chat. This level is what a human ↔ AI product adds — and it dominates the cost, the latency budget, and the operational difficulty. Serving an LLM is not like serving an API; it's running a fleet of extremely expensive, stateful, latency-sensitive accelerators as efficiently as physics allows.</p>
+
+      <h3>The request path, end to end</h3>
+      <figure>
+        <svg viewBox="0 0 680 250" role="img" aria-label="LLM inference pipeline">
+          <rect class="dg-box" x="14" y="100" width="92" height="46" rx="9"/><text class="dg-t" x="60" y="120" text-anchor="middle">Gateway</text><text class="dg-s" x="60" y="136" text-anchor="middle">auth,limit</text>
+          <rect class="dg-accent" x="132" y="100" width="98" height="46" rx="9"/><text class="dg-t" x="181" y="120" text-anchor="middle">Context</text><text class="dg-s" x="181" y="136" text-anchor="middle">build+RAG</text>
+          <rect class="dg-purple" x="256" y="100" width="98" height="46" rx="9"/><text class="dg-t" x="305" y="120" text-anchor="middle">Queue +</text><text class="dg-s" x="305" y="136" text-anchor="middle">router</text>
+          <rect class="dg-amber" x="380" y="80" width="120" height="86" rx="11"/><text class="dg-t" x="440" y="112" text-anchor="middle">Inference</text><text class="dg-s" x="440" y="130" text-anchor="middle">GPU fleet</text><text class="dg-s" x="440" y="146" text-anchor="middle">batched</text>
+          <rect class="dg-teal" x="528" y="100" width="120" height="46" rx="9"/><text class="dg-t" x="588" y="120" text-anchor="middle">Stream out</text><text class="dg-s" x="588" y="136" text-anchor="middle">SSE tokens</text>
+          <path class="dg-line-a" d="M106 123 H130" marker-end="url(#ar4)"/>
+          <path class="dg-line-a" d="M230 123 H254" marker-end="url(#ar4)"/>
+          <path class="dg-line-a" d="M354 123 H378" marker-end="url(#ar4)"/>
+          <path class="dg-line-a" d="M500 123 H526" marker-end="url(#ar4)"/>
+          <path class="dg-dash" d="M181 100 V60 H588 V98" marker-end="url(#ar4)"/>
+          <text class="dg-s" x="330" y="52" text-anchor="middle">safety / moderation wraps the whole path</text>
+          <defs><marker id="ar4" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="var(--accent)"/></marker></defs>
+        </svg>
+        <figcaption>L6 — the prompt is enriched with context, queued, routed to a GPU worker, generated in a batch, and streamed back.</figcaption>
+      </figure>
+
+      <h3>Context assembly &amp; the token budget</h3>
+      <p>Before the model runs, you build its input: the system prompt, relevant conversation history (often summarized or retrieved rather than sent whole), retrieved documents (RAG), and the new user turn — all inside a fixed context window. Every token here costs money and latency, so this stage is an optimization problem: <strong>send the model exactly what it needs and nothing more.</strong> Prompt <em>caching</em> (reusing the computed state of a stable prefix like the system prompt) is one of the biggest cost levers available.</p>
+
+      <h3>Why serving an LLM is hard: the two phases</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Phase</th><th>What happens</th><th>Bottleneck</th></tr></thead>
+          <tbody>
+            <tr><td><b>Prefill</b></td><td>Process the whole prompt at once, fill the KV cache</td><td>Compute-bound; sets time-to-first-token</td></tr>
+            <tr><td><b>Decode</b></td><td>Generate one token at a time, autoregressively</td><td>Memory-bandwidth-bound; sets tokens/sec</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>These two phases stress the GPU differently, which is why modern serving stacks sometimes <em>disaggregate</em> them onto different hardware pools. The <strong>KV cache</strong> — the model's memory of the tokens so far — grows with context length and eats GPU memory (HBM), which caps how many requests fit on a card at once.</p>
+
+      <h3>The efficiency levers (this is where the money is)</h3>
+      <ul>
+        <li><strong>Continuous batching</strong> — instead of waiting to assemble a fixed batch, the server continuously slots new requests into the running batch as others finish. This is the single biggest throughput win; it can multiply GPU utilization several-fold.</li>
+        <li><strong>PagedAttention / KV-cache paging</strong> — manage KV memory in pages (like OS virtual memory) so you don't over-reserve, fitting far more concurrent requests per GPU.</li>
+        <li><strong>Quantization</strong> — run weights at lower precision (FP8/INT8/INT4) for more throughput per card, trading a little quality.</li>
+        <li><strong>Speculative decoding</strong> — a small draft model proposes several tokens; the big model verifies them in one pass, cutting latency.</li>
+        <li><strong>Model routing</strong> — send easy queries to a small/cheap model and hard ones to the flagship. Most traffic doesn't need the biggest model; this is a massive cost saver.</li>
+        <li><strong>Prefix / prompt caching</strong> — reuse KV state for shared prefixes across requests.</li>
+      </ul>
+
+      <div class="note warn">
+        <div class="h">Queueing is not optional</div>
+        <p>GPUs are finite and expensive, so you can't scale them elastically per-request the way you scale stateless web servers. Demand spikes must be absorbed by a <strong>queue</strong> with admission control: prioritize by tier (paid &gt; free), shed or slow low-priority load under pressure, and give honest backpressure. A well-run inference service is mostly a well-run queue in front of a fixed pool of accelerators. Autoscaling GPUs is slow (minutes to acquire, cold model loads), so you provision to forecast plus a buffer and let the queue handle the rest.</p>
+      </div>
+
+      <h3>Reliability specifics for inference</h3>
+      <ul>
+        <li><strong>Streaming failures mid-generation</strong> — if a GPU worker dies at token 200 of 500, you need graceful degradation: retry on another worker (losing progress) or checkpoint. Make generations idempotent by message id so retries don't double-charge or double-post.</li>
+        <li><strong>Timeouts &amp; cancellation</strong> — enforce a max generation time; propagate client cancels all the way to the GPU to free capacity instantly.</li>
+        <li><strong>Multi-model / multi-version</strong> — you'll run several models and versions at once. Route by capability and roll out new versions gradually (see Deployment).</li>
+      </ul>
+
+      <h3>Capability envelope</h3>
+      <div class="env">
+        <div class="env-i good"><span>Handles</span><p>Streaming AI generation at high throughput per GPU; the more you optimize batching &amp; caching, the more requests per card.</p></div>
+        <div class="env-i bad"><span>Breaks when</span><p>Demand spikes past the fixed GPU pool — you can't autoscale GPUs in seconds — and the queue backs up.</p></div>
+        <div class="env-i warn"><span>Can't do</span><p>Scale elastically per-request like stateless web; hold low TTFT under overload without shedding/queueing.</p></div>
+        <div class="env-i fix"><span>Improve in place first</span><p>Continuous batching, paged KV cache, quantization, speculative decoding, model routing, prompt caching, admission-control queue.</p></div>
+      </div>
+      <div class="gain"><b>Gain over L5</b> The product becomes ChatGPT — it generates, not just stores and relays.</div>
+      <div class="threshold"><b>Trigger → L7</b><span>Users are global; the speed of light and data-residency law force compute closer to them.</span></div>
+    </section>
+
+    <!-- ============ L7 ============ -->
+    <section id="l7">
+      <span class="lvl l-6"><b>L7</b> · Going global</span>
+      <h2>Multi-region, edge, and the speed of light</h2>
+      <p class="lead">A user in Sydney talking to servers in Virginia pays ~200ms round-trip before any work happens — you can't out-engineer physics. Global scale means putting compute near users, which reintroduces the hardest distributed-systems problem: keeping data consistent across regions.</p>
+
+      <h3>What moves to the edge</h3>
+      <ul>
+        <li><strong>Static assets &amp; media</strong> — CDN, always. Cheapest, biggest win.</li>
+        <li><strong>TLS termination &amp; connection handling</strong> — terminate close to the user; backhaul over warm internal links.</li>
+        <li><strong>Connection servers</strong> — hold sockets regionally so the persistent connection is short-hop.</li>
+      </ul>
+
+      <h3>What's hard to move: state</h3>
+      <p>You now choose a data topology, each a point on the consistency/latency triangle:</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Topology</th><th>Idea</th><th>Cost</th></tr></thead>
+          <tbody>
+            <tr><td><b>Single-region primary</b></td><td>All writes go home; regions cache reads</td><td>Simple; far users have slow writes</td></tr>
+            <tr><td><b>Data residency by user</b></td><td>Each user's data lives in their home region</td><td>Fast for them; cross-region chats get complex</td></tr>
+            <tr><td><b>Active-active multi-master</b></td><td>Writes anywhere, reconcile</td><td>Fastest; hardest correctness (conflict resolution)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note">
+        <div class="h">For an LLM product, geography follows the GPUs</div>
+        <p>Inference must run where the accelerators are, and GPU capacity is scarce and unevenly distributed globally. So the practical pattern is: <strong>connections and light state at the edge, inference in a handful of GPU super-regions.</strong> You accept some latency to reach the model, and spend the latency budget you saved at the edge on getting the prompt there fast. Data-residency and compliance (GDPR, regional data laws) often <em>force</em> the topology more than performance does.</p>
+      </div>
+
+      <figure>
+        <svg viewBox="0 0 640 250" role="img" aria-label="Global edge with central GPU regions">
+          <rect class="dg-box" x="14" y="30" width="120" height="42" rx="9"/><text class="dg-t" x="74" y="51" text-anchor="middle">User · EU</text><text class="dg-s" x="74" y="66" text-anchor="middle">edge PoP</text>
+          <rect class="dg-box" x="14" y="104" width="120" height="42" rx="9"/><text class="dg-t" x="74" y="125" text-anchor="middle">User · US</text><text class="dg-s" x="74" y="140" text-anchor="middle">edge PoP</text>
+          <rect class="dg-box" x="14" y="178" width="120" height="42" rx="9"/><text class="dg-t" x="74" y="199" text-anchor="middle">User · APAC</text><text class="dg-s" x="74" y="214" text-anchor="middle">edge PoP</text>
+          <rect class="dg-teal" x="200" y="30" width="130" height="42" rx="10"/><text class="dg-t" x="265" y="51" text-anchor="middle">Edge: TLS</text><text class="dg-s" x="265" y="66" text-anchor="middle">sockets · CDN</text>
+          <rect class="dg-teal" x="200" y="104" width="130" height="42" rx="10"/><text class="dg-t" x="265" y="125" text-anchor="middle">Edge: TLS</text><text class="dg-s" x="265" y="140" text-anchor="middle">sockets · CDN</text>
+          <rect class="dg-teal" x="200" y="178" width="130" height="42" rx="10"/><text class="dg-t" x="265" y="199" text-anchor="middle">Edge: TLS</text><text class="dg-s" x="265" y="214" text-anchor="middle">sockets · CDN</text>
+          <rect class="dg-amber" x="400" y="60" width="150" height="54" rx="11"/><text class="dg-t" x="475" y="82" text-anchor="middle">GPU region 1</text><text class="dg-s" x="475" y="99" text-anchor="middle">inference</text>
+          <rect class="dg-amber" x="400" y="136" width="150" height="54" rx="11"/><text class="dg-t" x="475" y="158" text-anchor="middle">GPU region 2</text><text class="dg-s" x="475" y="175" text-anchor="middle">inference</text>
+          <path class="dg-line" d="M134 51 H198" marker-end="url(#ar7b)"/>
+          <path class="dg-line" d="M134 125 H198" marker-end="url(#ar7b)"/>
+          <path class="dg-line" d="M134 199 H198" marker-end="url(#ar7b)"/>
+          <path class="dg-line-a" d="M330 51 L398 82" marker-end="url(#ar7b)"/>
+          <path class="dg-line-a" d="M330 125 L398 150" marker-end="url(#ar7b)"/>
+          <path class="dg-line-a" d="M330 199 L398 170" marker-end="url(#ar7b)"/>
+          <path class="dg-dash" d="M475 114 V134"/><text class="dg-s" x="560" y="128" text-anchor="middle">async</text><text class="dg-s" x="560" y="142" text-anchor="middle">replicate</text>
+          <defs><marker id="ar7b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="var(--accent)"/></marker></defs>
+        </svg>
+        <figcaption>L7 — short-hop edge everywhere (connections, TLS, CDN), inference concentrated in a few GPU super-regions, state reconciled asynchronously.</figcaption>
+      </figure>
+
+      <h3>Capability envelope</h3>
+      <div class="env">
+        <div class="env-i good"><span>Handles</span><p>Low-latency worldwide access, regional data residency, and resilience to a whole region failing.</p></div>
+        <div class="env-i bad"><span>Breaks when</span><p>Cross-region consistency conflicts, uneven GPU capacity between regions, or egress costs balloon.</p></div>
+        <div class="env-i warn"><span>Can't do</span><p>Beat the speed of light, or offer strong write-local consistency everywhere at low cost.</p></div>
+        <div class="env-i fix"><span>Improve in place first</span><p>Edge termination, per-user data residency, CDN, async replication, route inference to nearest GPU region.</p></div>
+      </div>
+      <div class="gain"><b>Gain over L6</b> The product feels local everywhere and survives regional outages — the top of the ladder.</div>
+      <div class="threshold"><b>Beyond L7</b><span>It's no longer new levels — it's endless refinement: cost, quality, efficiency, and the measurement discipline that follows.</span></div>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ============ AUTH ============ -->
+    <section id="auth">
+      <div class="kicker">Chapter 02 · Cross-cutting</div>
+      <h2>Authentication &amp; security</h2>
+      <p class="lead">Security isn't a level you add at the end — it wraps every request from L0 onward. At scale, the goals are: prove who the user is cheaply on every request, keep sockets authenticated, and contain blast radius when something is compromised.</p>
+
+      <h3>AuthN vs. AuthZ</h3>
+      <p><strong>Authentication</strong> ("who are you") is usually solved with OAuth 2.0 / OpenID Connect (social/enterprise login) issuing tokens. <strong>Authorization</strong> ("what may you do") is a separate, ongoing check — can this user read this conversation, use this model, spend this quota.</p>
+
+      <h3>Tokens: the stateless-vs-revocable tension</h3>
+      <ul>
+        <li><strong>JWT access tokens</strong> — signed, self-contained, verifiable by any server without a DB hit. Perfect for a stateless tier. The catch: they're hard to revoke before expiry.</li>
+        <li><strong>Short-lived access + long-lived refresh</strong> — the standard fix. Access tokens live minutes; a refresh token (revocable, stored server-side) mints new ones. Revoke the refresh token to cut off access soon.</li>
+        <li><strong>Authenticating the socket</strong> — validate the token at connection time, and re-check periodically; a socket open for hours shouldn't outlive a revoked session.</li>
+      </ul>
+
+      <div class="note gotcha">
+        <div class="h">Chat-specific security landmines</div>
+        <p><b>Authorization on fan-out:</b> when a message is delivered, re-verify the recipient is actually a member of that room — never trust that subscription implies permission. <b>Injection into the model:</b> in an AI product, user (and retrieved) content becomes part of a prompt — treat prompt injection as an untrusted-input problem; never let model output trigger privileged actions without an authorization gate. <b>Data isolation:</b> one tenant's conversations must never leak into another's context or cache.</p>
+      </div>
+
+      <h3>Defense in depth</h3>
+      <ul>
+        <li>TLS everywhere, including internal service-to-service (mTLS / a service mesh).</li>
+        <li>Encryption at rest for messages and attachments; envelope encryption with rotating keys.</li>
+        <li>Secrets in a vault, never in code or env files committed to a repo.</li>
+        <li>Least privilege for every service identity; audit logs for sensitive actions.</li>
+        <li>WAF and DDoS protection at the edge (the front door is the biggest target).</li>
+        <li>End-to-end encryption for human↔human privacy products — note it's largely incompatible with server-side AI features, which must read the plaintext.</li>
+      </ul>
+    </section>
+
+    <!-- ============ RATE LIMIT ============ -->
+    <section id="ratelimit">
+      <div class="kicker">Chapter 03 · Cross-cutting</div>
+      <h2>Rate limiting, quotas &amp; abuse</h2>
+      <p class="lead">When each request can cost real GPU-seconds, rate limiting stops being about politeness and becomes about survival and unit economics. It's also your first line of defense against abuse and runaway costs.</p>
+
+      <h3>Algorithms</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Algorithm</th><th>Behavior</th><th>Best for</th></tr></thead>
+          <tbody>
+            <tr><td><b>Token bucket</b></td><td>Allows bursts up to a cap, refills steadily</td><td>General API limiting — the default</td></tr>
+            <tr><td><b>Leaky bucket</b></td><td>Smooths to a constant rate, no bursts</td><td>Protecting a fixed-capacity backend (GPUs!)</td></tr>
+            <tr><td><b>Sliding window</b></td><td>Accurate count over a rolling period</td><td>Fair per-user quotas</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Limit on multiple dimensions at once: requests/sec, <strong>tokens</strong>/minute (the one that actually maps to cost), concurrent generations, and spend/day. Enforce in a shared store (Redis) so limits are global across all app servers, not per-box.</p>
+
+      <div class="note">
+        <div class="h">Tiering is the business model</div>
+        <p>Free, plus, and enterprise tiers get different limits, different queue priorities, and often different models. Under capacity pressure you gracefully degrade the free tier (longer queue, smaller model, "try again shortly") to protect paying users. Rate limiting, queue priority, and billing are three views of the same underlying admission-control system.</p>
+      </div>
+
+      <h3>Abuse &amp; safety</h3>
+      <ul>
+        <li><strong>Content moderation</strong> — classify inputs and outputs; block or flag disallowed content. This runs on the hot path, so it must be fast (often a small dedicated model).</li>
+        <li><strong>Bot / scraping defense</strong> — detect automated abuse that racks up cost; CAPTCHAs at signup, anomaly detection on usage.</li>
+        <li><strong>Cost anomaly alerts</strong> — a single account suddenly consuming 1000× normal tokens is either an attack or a bug; alert and auto-throttle.</li>
+      </ul>
+    </section>
+
+    <!-- ============ OBSERVABILITY ============ -->
+    <section id="obs">
+      <div class="kicker">Chapter 04 · Cross-cutting</div>
+      <h2>Observability</h2>
+      <p class="lead">At this scale you cannot debug by reading logs on a box — the box is one of thousands and may already be gone. You instrument the system so it explains itself. The rule: if you can't measure it, you can't operate it.</p>
+
+      <h3>The three pillars, plus one</h3>
+      <ul>
+        <li><strong>Metrics</strong> — cheap numeric time series: request rate, error rate, latency percentiles, GPU utilization, queue depth, tokens/sec. Alert on these.</li>
+        <li><strong>Logs</strong> — structured, sampled at high volume, centralized and searchable.</li>
+        <li><strong>Traces</strong> — follow one request across gateway → context builder → queue → GPU → stream. Essential when latency comes from one hop among many.</li>
+        <li><strong>Evals (AI-specific)</strong> — for an LLM product, output <em>quality</em> is a first-class signal. Continuously sample and grade responses; watch for regressions when you change models or prompts.</li>
+      </ul>
+
+      <h3>The percentiles that matter</h3>
+      <p>Average latency lies. At 1M req/s, the 1% slowest requests are 10,000 requests <em>per second</em> of unhappy users. Track and alert on p50 / p95 / p99 / p99.9 separately. For chat specifically, the two headline SLIs are <strong>time-to-first-token</strong> (does it feel responsive?) and <strong>inter-token latency</strong> (does it stream smoothly, or stutter?).</p>
+
+      <div class="note">
+        <div class="h">SLOs turn metrics into decisions</div>
+        <p>Define Service Level Objectives (e.g. "99.9% of streams start within 1s over 28 days") and an <strong>error budget</strong> — the allowed amount of failure. When you're burning the budget too fast, you freeze risky launches and fix reliability; when you have budget to spare, you ship faster. It aligns velocity and stability instead of arguing about them.</p>
+      </div>
+    </section>
+
+    <!-- ============ DEPLOY ============ -->
+    <section id="deploy">
+      <div class="kicker">Chapter 05 · Cross-cutting</div>
+      <h2>Deployment &amp; release strategy</h2>
+      <p class="lead">A system that serves millions can never go fully offline to update. Every change must roll out while the system stays up, and roll back instantly when it's wrong. This is where CI/CD, containers, and orchestration earn their place.</p>
+
+      <h3>The foundation</h3>
+      <ul>
+        <li><strong>Containers</strong> (Docker) for reproducible, identical builds from laptop to production.</li>
+        <li><strong>Orchestration</strong> (Kubernetes) to schedule, heal, and autoscale those containers — with GPU-aware scheduling for the inference tier.</li>
+        <li><strong>Infrastructure as code</strong> (Terraform) so the whole system is versioned, reviewable, and reproducible.</li>
+        <li><strong>CI/CD pipeline</strong> — every commit is tested, built into an image, and promoted through environments automatically.</li>
+      </ul>
+
+      <h3>Progressive delivery</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Strategy</th><th>How</th><th>Rollback</th></tr></thead>
+          <tbody>
+            <tr><td><b>Rolling</b></td><td>Replace instances a few at a time</td><td>Roll forward/back gradually</td></tr>
+            <tr><td><b>Blue-green</b></td><td>Full parallel environment; flip traffic at once</td><td>Flip back instantly</td></tr>
+            <tr><td><b>Canary</b></td><td>Send 1% → 5% → 50% → 100%, watching metrics</td><td>Halt &amp; revert at first bad signal</td></tr>
+            <tr><td><b>Feature flags</b></td><td>Ship code dark, enable per cohort at runtime</td><td>Toggle off — no redeploy</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note warn">
+        <div class="h">Deploying stateful and GPU tiers is different</div>
+        <p><b>Connection servers</b> hold live sockets — a naive rolling deploy drops millions of connections. Use connection draining and let clients reconnect (with jittered backoff to avoid a thundering herd). <b>GPU/model rollouts</b> are heavyweight: loading a model onto a fleet takes minutes and capacity is scarce, so you canary new model versions carefully, keep the old version warm for instant rollback, and often route by version so you can shift traffic gradually. <b>Schema changes</b> must be backward-compatible (expand-then-contract): add columns before code uses them, remove them only after all old code is gone.</p>
+      </div>
+    </section>
+
+    <!-- ============ COST ============ -->
+    <section id="cost">
+      <div class="kicker">Chapter 06 · Cross-cutting</div>
+      <h2>Cost &amp; capacity planning</h2>
+      <p class="lead">For a normal web app, cost is an afterthought. For an LLM chat product, cost <em>is</em> the architecture — the difference between a viable business and a money furnace often comes down to tokens-per-dollar. Nearly every L6 optimization exists to move this number.</p>
+
+      <div class="cards">
+        <div class="card"><div class="big">~90%</div><div class="lab">of infra cost</div><div class="sub">is typically the GPU/inference tier</div></div>
+        <div class="card"><div class="big">Routing</div><div class="lab">biggest lever</div><div class="sub">small model for easy queries</div></div>
+        <div class="card"><div class="big">Caching</div><div class="lab">free wins</div><div class="sub">prompt/prefix reuse, response cache</div></div>
+        <div class="card"><div class="big">Batching</div><div class="lab">utilization</div><div class="sub">keep GPUs full, never idle</div></div>
+      </div>
+
+      <h3>The cost hierarchy, and what to do about each</h3>
+      <ul>
+        <li><strong>Inference (dominant)</strong> — right-size the model per query (routing), batch continuously, quantize, cache prompts and common responses, cap max output length, and reserve/commit capacity for a discount over on-demand.</li>
+        <li><strong>Storage</strong> — tier hot→cold aggressively; compress; set TTLs; most history is never re-read.</li>
+        <li><strong>Bandwidth / egress</strong> — CDN for media; cross-region egress is a silent budget killer, so keep chatty traffic intra-region.</li>
+        <li><strong>The stateless web/connection tier</strong> — comparatively cheap; autoscale it freely.</li>
+      </ul>
+      <div class="note">
+        <div class="h">Unit economics beats absolute cost</div>
+        <p>Track <strong>cost per conversation</strong> and <strong>cost per active user</strong>, not just the total bill. That's what tells you whether growth makes the problem better or worse, and it's the number that decides which free-tier limits and model-routing rules keep the business alive. A feature that's cheap at 10k users can be ruinous at 10M if its cost scales linearly with usage.</p>
+      </div>
+    </section>
+
+    <!-- ============ FAILURE ============ -->
+    <section id="failure">
+      <div class="kicker">Chapter 07 · Cross-cutting</div>
+      <h2>Failure modes &amp; resilience</h2>
+      <p class="lead">At scale, failure is not an event — it's a constant background condition. Something is always broken; the design goal is that no single failure is visible to most users. You engineer for graceful degradation, not for the absence of faults.</p>
+
+      <h3>Design principles</h3>
+      <ul>
+        <li><strong>No single point of failure</strong> — redundancy at every tier; assume any one instance, rack, or availability zone can vanish.</li>
+        <li><strong>Bulkheads</strong> — isolate failures so a broken subsystem (say, search) can't sink the core chat path.</li>
+        <li><strong>Circuit breakers</strong> — stop hammering a failing dependency; fail fast and shed load instead of piling up.</li>
+        <li><strong>Timeouts &amp; retries with backoff + jitter</strong> — never retry instantly in lockstep, or you create a self-inflicted DDoS (thundering herd).</li>
+        <li><strong>Idempotency</strong> — every mutating operation carries a client-generated id so retries don't duplicate messages or double-bill.</li>
+        <li><strong>Backpressure</strong> — when overloaded, say no cleanly (queue, slow down, shed) rather than collapsing.</li>
+      </ul>
+
+      <h3>Graceful degradation ladder</h3>
+      <p>When the system is under stress, shed capability in order of least harm — a partial product beats an error page:</p>
+      <div class="pills">
+        <span class="pill"><b>1.</b> disable typing indicators / presence</span>
+        <span class="pill"><b>2.</b> serve cached / smaller model</span>
+        <span class="pill"><b>3.</b> queue free tier, protect paid</span>
+        <span class="pill"><b>4.</b> read-only history mode</span>
+        <span class="pill"><b>5.</b> honest "at capacity" message</span>
+      </div>
+
+      <div class="note">
+        <div class="h">Prove it: chaos &amp; game days</div>
+        <p>Resilience you haven't tested is a hypothesis. Deliberately inject failures in production-like conditions (kill instances, add latency, sever a region) so you discover the weak links before your users do. The teams that run the most reliable systems are the ones that break them on purpose, on schedule.</p>
+      </div>
+    </section>
+
+    <!-- ============ MEASURE ============ -->
+    <section id="measure">
+      <div class="kicker">Chapter 08 · The implementation guide</div>
+      <h2>Measuring it for real: a framework you can actually build</h2>
+      <p class="lead">A design on paper is a hypothesis. This chapter is the tangent that turns it into an engineering discipline: <em>how do you prove which level you're at, where it breaks, and whether a change helped?</em> It's a concrete, tool-by-tool playbook — the methodology, the exact stack, the config to drop into your deployment, and a per-level benchmark plan — written so you can implement it as you build your ChatGPT.</p>
+
+      <h3>The mental model: three lenses, one loop</h3>
+      <p>Everything you measure fits one of three battle-tested frameworks. Learn them and you'll never wonder "what should I even track?"</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Framework</th><th>Applies to</th><th>Signals</th></tr></thead>
+          <tbody>
+            <tr><td><b>RED</b></td><td>Services / request paths</td><td><b>R</b>ate · <b>E</b>rrors · <b>D</b>uration (latency)</td></tr>
+            <tr><td><b>USE</b></td><td>Resources (CPU, GPU, disk, queue)</td><td><b>U</b>tilization · <b>S</b>aturation · <b>E</b>rrors</td></tr>
+            <tr><td><b>Four Golden Signals</b></td><td>The whole system (Google SRE)</td><td>Latency · Traffic · Errors · Saturation</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The loop that ties them together: <strong>instrument → baseline → load-test to the breaking point → optimize → re-test → set an SLO + alert → gate it in CI.</strong> Repeat at every level. Below, each piece of that loop with real tooling.</p>
+
+      <h3>Step 1 — Define SLIs, SLOs, and an error budget</h3>
+      <p>An <strong>SLI</strong> is a measured number (p99 time-to-first-token). An <strong>SLO</strong> is the target for it ("99.9% of streams start within 1s over 28 days"). The <strong>error budget</strong> is 100% minus the SLO — the failure you're allowed to spend. This is the contract everything else measures against; write it before you write dashboards.</p>
+
+      <h3>Step 2 — What to measure, by viewpoint</h3>
+      <p>Your request for "all the different points of view" — here they are, each with the metric that represents it and a starting target for a chat product.</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Viewpoint</th><th>Metric (SLI)</th><th>How it's captured</th><th>Starting target</th></tr></thead>
+          <tbody>
+            <tr><td rowspan="4"><b>Latency</b></td><td>Time to first token (TTFT)</td><td>Timer: request start → first SSE byte</td><td class="mono">p95 &lt; 800ms</td></tr>
+            <tr><td>Inter-token latency (ITL)</td><td>Gap between streamed tokens</td><td class="mono">p95 &lt; 80ms</td></tr>
+            <tr><td>End-to-end response time</td><td>Full generation duration</td><td class="mono">depends on length</td></tr>
+            <tr><td>API / non-AI request latency</td><td>Histogram on the handler</td><td class="mono">p99 &lt; 200ms</td></tr>
+            <tr><td rowspan="3"><b>Throughput</b></td><td>Requests / second</td><td>Counter rate</td><td class="mono">per level target</td></tr>
+            <tr><td>Output tokens / second (system &amp; per GPU)</td><td>Counter rate + GPU labels</td><td class="mono">maximize</td></tr>
+            <tr><td>Messages delivered / second</td><td>Counter on fan-out path</td><td class="mono">= send rate</td></tr>
+            <tr><td rowspan="4"><b>Saturation</b></td><td>CPU / memory utilization</td><td>node_exporter</td><td class="mono">&lt; 70% steady</td></tr>
+            <tr><td>GPU utilization &amp; KV-cache / HBM usage</td><td>DCGM exporter</td><td class="mono">high but not 100%</td></tr>
+            <tr><td>Inference queue depth &amp; wait time</td><td>Custom gauge</td><td class="mono">alert on growth</td></tr>
+            <tr><td>Open connections per server</td><td>Custom gauge</td><td class="mono">&lt; box limit</td></tr>
+            <tr><td rowspan="3"><b>Errors / reliability</b></td><td>5xx rate, timeout rate</td><td>Counter by status</td><td class="mono">&lt; 0.1%</td></tr>
+            <tr><td>Stream drop / mid-generation failure rate</td><td>Counter on stream close reason</td><td class="mono">&lt; 0.5%</td></tr>
+            <tr><td>Cancellation / abandonment rate</td><td>Counter on client abort</td><td class="mono">track (money)</td></tr>
+            <tr><td rowspan="2"><b>Quality</b></td><td>Eval score / regression</td><td>Offline + sampled online grading</td><td class="mono">no regressions</td></tr>
+            <tr><td>Refusal / hallucination flags</td><td>Classifier on sampled outputs</td><td class="mono">trend down</td></tr>
+            <tr><td rowspan="2"><b>Cost</b></td><td>Cost per conversation / per user</td><td>Tokens × price, joined to usage</td><td class="mono">below revenue/user</td></tr>
+            <tr><td>GPU-hours per 1M tokens</td><td>Fleet accounting</td><td class="mono">minimize</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Step 3 — The toolchain (open-source-first)</h3>
+      <p>A complete, production-grade stack. Every piece here is battle-tested and self-hostable; swap in managed equivalents (Datadog, New Relic, Honeycomb) if you'd rather not run them.</p>
+      <div class="toolgrid">
+        <div class="tool"><div class="cat">Metrics</div><div class="nmz">Prometheus + Grafana</div><div class="d">Scrape time-series from every service; dashboard and alert on them. The default backbone of observability.</div></div>
+        <div class="tool"><div class="cat">Tracing</div><div class="nmz">OpenTelemetry + Jaeger / Tempo</div><div class="d">One trace follows a request across gateway → context → queue → GPU → stream. Finds <em>which hop</em> is slow.</div></div>
+        <div class="tool"><div class="cat">Logs</div><div class="nmz">Loki or OpenSearch (ELK)</div><div class="d">Structured, centralized, searchable. Correlate to traces via a shared request id.</div></div>
+        <div class="tool"><div class="cat">GPU telemetry</div><div class="nmz">NVIDIA DCGM exporter</div><div class="d">GPU util, memory, temp, power straight into Prometheus. Non-negotiable for the inference tier.</div></div>
+        <div class="tool"><div class="cat">Load — HTTP/API</div><div class="nmz">k6 · Gatling · Locust</div><div class="d">Scriptable load generation with rich metrics. k6 is the modern default; Locust if you prefer Python.</div></div>
+        <div class="tool"><div class="cat">Load — WS/SSE</div><div class="nmz">k6 (xk6-sse / ws) · Artillery</div><div class="d">Drive persistent connections and streaming endpoints — the ones ordinary load tools can't measure.</div></div>
+        <div class="tool"><div class="cat">Load — LLM</div><div class="nmz">GenAI-Perf · LLMPerf · vLLM bench</div><div class="d">Purpose-built to report TTFT, ITL, and tokens/sec under concurrency for inference servers.</div></div>
+        <div class="tool"><div class="cat">Chaos</div><div class="nmz">Chaos Mesh · Litmus</div><div class="d">Inject pod kills, latency, network partitions on Kubernetes to prove resilience claims.</div></div>
+        <div class="tool"><div class="cat">Synthetic / uptime</div><div class="nmz">Blackbox exporter · k6 cloud</div><div class="d">Probe the real endpoints from outside continuously — catches what internal metrics miss.</div></div>
+        <div class="tool"><div class="cat">Real-user (RUM)</div><div class="nmz">Browser Performance API</div><div class="d">Measure TTFT and render as <em>users</em> actually experience it, from their devices and networks.</div></div>
+        <div class="tool"><div class="cat">Profiling</div><div class="nmz">pprof · py-spy · perf</div><div class="d">When a service is slow or hot, profile it to find the exact function burning CPU or blocking.</div></div>
+        <div class="tool"><div class="cat">Eval / quality</div><div class="nmz">LLM-as-judge · golden sets</div><div class="d">Grade output quality continuously so a latency win never silently ships a quality regression.</div></div>
+      </div>
+
+      <h3>Step 4 — Configure it in your deployment (copy-paste starters)</h3>
+      <p>These are minimal but real. Drop them into a Kubernetes + Prometheus deployment and adapt the labels.</p>
+
+      <div class="code">
+        <div class="fn">prometheus.yml — scrape your services + GPUs</div>
+        <pre><code><span class="cm"># Prometheus scrapes each service's /metrics endpoint every 15s</span>
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: chat-api
+    kubernetes_sd_configs: [{ role: pod }]
+    relabel_configs:            <span class="cm"># only pods labelled prometheus=scrape</span>
+      - source_labels: [__meta_kubernetes_pod_label_prometheus]
+        action: keep
+        regex: scrape
+  - job_name: gpu-dcgm          <span class="cm"># NVIDIA DCGM exporter, one per GPU node</span>
+    static_configs: [{ targets: ['dcgm-exporter:9400'] }]</code></pre>
+      </div>
+
+      <div class="code">
+        <div class="fn">rules.yml — turn raw histograms into the SLIs that matter</div>
+        <pre><code><span class="cm"># p99 time-to-first-token from a Prometheus histogram</span>
+- record: ttft:p99
+  expr: histogram_quantile(0.99,
+          sum(rate(ttft_seconds_bucket[5m])) by (le))
+
+<span class="cm"># Alert when the SLO is breached for 10 minutes</span>
+- alert: TTFTSloBreach
+  expr: ttft:p99 &gt; 1.0
+  for: 10m
+  labels:   { severity: page }
+  annotations: { summary: "p99 TTFT above 1s" }</code></pre>
+      </div>
+
+      <div class="code">
+        <div class="fn">instrument.js — emit TTFT + ITL from the streaming handler</div>
+        <pre><code><span class="cm">// wrap the SSE handler so every stream reports its own timings</span>
+const t0 = performance.now();
+let firstToken = true, last = t0;
+for await (const token of model.stream(prompt)) {
+  const now = performance.now();
+  if (firstToken) { ttftHistogram.observe((now - t0)/1000); firstToken = false; }
+  else            { itlHistogram.observe((now - last)/1000); }
+  last = now;
+  res.write(`data: ${token}\n\n`);      <span class="cm">// SSE frame</span>
+}
+tokensCounter.inc(tokenCount);</code></pre>
+      </div>
+
+      <div class="code">
+        <div class="fn">loadtest-sse.js — k6 ramp test that measures streaming under load</div>
+        <pre><code>import sse from 'k6/x/sse';
+import { Trend } from 'k6/metrics';
+const ttft = new Trend('ttft_ms', true);
+
+export const options = {                 <span class="cm">// ramp to find the knee</span>
+  stages: [
+    { duration: '2m', target: 200 },     <span class="cm"># warm up</span>
+    { duration: '5m', target: 2000 },    <span class="cm"># push toward the limit</span>
+    { duration: '3m', target: 5000 },    <span class="cm"># stress</span>
+  ],
+  thresholds: { ttft_ms: ['p(95)&lt;800'] },  <span class="cm"># fail the test if SLO breaks</span>
+};
+
+export default function () {
+  const start = Date.now();
+  let got = false;
+  sse.open('https://api.example.com/chat', { method:'POST',
+    body: JSON.stringify({ prompt: 'hello' }) }, (client) =&gt; {
+      client.on('event', () =&gt; {
+        if (!got) { ttft.add(Date.now() - start); got = true; }
+      });
+  });
+}</code></pre>
+      </div>
+      <p>Point the same pattern at each layer: a plain <code>http</code> script for the API tier, a <code>ws</code> script that opens and holds N connections for the connection tier, and GenAI-Perf against the inference server for the GPU tier.</p>
+
+      <h3>Step 5 — Grafana dashboards to build</h3>
+      <div class="pills">
+        <span class="pill"><b>Golden signals</b> — rate, error %, p50/p95/p99 latency, saturation</span>
+        <span class="pill"><b>Streaming</b> — TTFT &amp; ITL percentiles, active streams, drop rate</span>
+        <span class="pill"><b>Inference</b> — GPU util, KV/HBM, queue depth &amp; wait, tokens/s per GPU</span>
+        <span class="pill"><b>Fan-out</b> — pub/sub lag, delivery rate, hot-channel skew</span>
+        <span class="pill"><b>Cost</b> — tokens/s × price, cost per conversation, GPU-hours</span>
+        <span class="pill"><b>SLO burn</b> — error-budget remaining, burn-rate alerts</span>
+      </div>
+
+      <h3>Step 6 — The per-level benchmark plan</h3>
+      <p>This is the answer to "how do I measure progress across the levels?" For each level, load exactly the thing that level introduced, watch the metric that fails first, and ramp until it breaks — that breaking point <em>is</em> your capacity number.</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Level</th><th>What to load</th><th>Tool</th><th>Metric that fails first</th><th>"Passing" looks like</th></tr></thead>
+          <tbody>
+            <tr><td><b>L0/L1</b></td><td>CRUD + history reads</td><td>k6 / Locust</td><td>API p99, DB CPU</td><td>p99 &lt; 200ms at target RPS</td></tr>
+            <tr><td><b>L2</b></td><td>Concurrent SSE streams</td><td>k6 SSE</td><td>TTFT, fds/CPU on the box</td><td>TTFT p95 &lt; 800ms, no drops</td></tr>
+            <tr><td><b>L3</b></td><td>N held WebSocket connections</td><td>k6 ws / Artillery</td><td>connections/box, LB balance</td><td>even spread, no mass drops on deploy</td></tr>
+            <tr><td><b>L4</b></td><td>Fan-out to large rooms</td><td>custom + k6</td><td>pub/sub lag, delivery rate</td><td>delivery rate = send rate, low lag</td></tr>
+            <tr><td><b>L5</b></td><td>Skewed write/read (hot key)</td><td>k6 + shard metrics</td><td>hot-partition latency</td><td>no single shard saturates</td></tr>
+            <tr><td><b>L6</b></td><td>Concurrent generations</td><td>GenAI-Perf / LLMPerf</td><td>TTFT, queue wait, GPU util</td><td>throughput up, TTFT held under load</td></tr>
+            <tr><td><b>L7</b></td><td>Multi-region + region kill</td><td>k6 cloud + Chaos Mesh</td><td>cross-region latency, failover</td><td>survives a region loss, latency in budget</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Step 7 — Finding the breaking point (the four test shapes)</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Test</th><th>Shape</th><th>Answers</th></tr></thead>
+          <tbody>
+            <tr><td><b>Load</b></td><td>Hold at expected peak</td><td>Do we meet SLOs at real traffic?</td></tr>
+            <tr><td><b>Stress / ramp</b></td><td>Increase until it breaks</td><td>Where's the ceiling? (the "knee" of the curve)</td></tr>
+            <tr><td><b>Spike</b></td><td>Sudden 10× jump</td><td>Do autoscaling &amp; queues absorb bursts?</td></tr>
+            <tr><td><b>Soak</b></td><td>Moderate load for hours</td><td>Memory leaks, fd leaks, slow degradation?</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note">
+        <div class="h">The knee, and Little's Law</div>
+        <p>As you ramp, latency stays flat, then <em>hockey-sticks</em> upward at the knee — that inflection is your real capacity, and you provision to stay left of it. <strong>Little's Law</strong> (<code>L = λ × W</code>: concurrent-in-flight = arrival-rate × time-in-system) lets you predict it: if each generation takes 4s and you can hold 2,000 concurrently, your ceiling is ~500 req/s per pool. Measure two of the three, compute the third, and you can size capacity without guessing.</p>
+      </div>
+
+      <h3>Step 8 — Automate it: performance gates in CI</h3>
+      <ul>
+        <li><strong>Regression gates</strong> — run a scaled-down k6 test in CI on every change; fail the build if p95 latency or tokens/sec regresses beyond a threshold. This is the discipline that keeps a system fast <em>over time</em>.</li>
+        <li><strong>Nightly full load tests</strong> against staging, with results trended in Grafana so drift is visible.</li>
+        <li><strong>Scheduled chaos</strong> (game days) — kill a region on a schedule and confirm SLOs hold.</li>
+        <li><strong>Eval gates</strong> — before promoting a new model/prompt, run the golden eval set; block on quality regressions just like latency ones.</li>
+      </ul>
+
+      <div class="note warn">
+        <div class="h">Measure production, not just the lab</div>
+        <p>Load tests tell you what <em>should</em> happen; real users on real networks tell you what <em>does</em>. Always run both: synthetic load + chaos for confidence before shipping, and RUM + live SLO burn-rate alerts to catch what the lab never reproduces. The gap between the two is where your next incident lives.</p>
+      </div>
+    </section>
+
+    <!-- ============ NUMBERS ============ -->
+    <section id="numbers">
+      <div class="kicker">Appendix A · Reference</div>
+      <h2>Numbers every designer should know</h2>
+      <p class="lead">Order-of-magnitude figures let you sanity-check a design in your head. Memorize the shape, not the exact digits — they change, the ratios don't.</p>
+
+      <h3>Latency ladder</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Operation</th><th>Approx. time</th></tr></thead>
+          <tbody>
+            <tr><td>L1 cache reference</td><td class="mono">~1 ns</td></tr>
+            <tr><td>Main memory reference</td><td class="mono">~100 ns</td></tr>
+            <tr><td>Read 1 MB sequentially from memory</td><td class="mono">~10 µs</td></tr>
+            <tr><td>SSD random read</td><td class="mono">~100 µs</td></tr>
+            <tr><td>Round trip within a datacenter</td><td class="mono">~0.5 ms</td></tr>
+            <tr><td>Redis GET (in-region)</td><td class="mono">~0.5–1 ms</td></tr>
+            <tr><td>LLM time-to-first-token (target)</td><td class="mono">~200–500 ms</td></tr>
+            <tr><td>Cross-continent round trip</td><td class="mono">~150–200 ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Capacity rules of thumb</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Thing</th><th>Rough figure</th></tr></thead>
+          <tbody>
+            <tr><td>WebSockets per tuned Linux box</td><td class="mono">~100k–1M (memory-bound)</td></tr>
+            <tr><td>Requests/sec per app server (light work)</td><td class="mono">~5k–50k</td></tr>
+            <tr><td>Output tokens/sec per high-end GPU (batched)</td><td class="mono">~1k–5k</td></tr>
+            <tr><td>Peak-to-average traffic ratio</td><td class="mono">~3–10×</td></tr>
+            <tr><td>Availability: 99.9% / 99.99%</td><td class="mono">~8.8h / 52m downtime per year</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <div class="h">The one-paragraph summary</div>
+        <p>Build a real-time chat product in layers: a stateless app tier over a durable, sharded data tier; a connection tier holding persistent sockets, fed by a pub/sub backbone that solves fan-out; and — the part that makes it ChatGPT — a queued, batched GPU inference fleet that streams tokens back over SSE. Wrap all of it in auth, rate limiting, observability, progressive deployment, and relentless cost control, and design every piece assuming the others are already on fire. The architecture scales to a million requests a second; your GPU budget decides how much of that you actually turn on.</p>
+      </div>
+    </section>
+
+  </main>
+</div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <b>Chat at Planet Scale</b> — a system-design field guide, built as a living reference.
+    <span>L0→L7 evolution (each with a diagram + capability card), six cross-cutting concerns, and a hands-on measurement &amp; benchmarking guide. Ask to go deeper on any level and this expands.</span>
+    <span style="color:var(--faint);font-size:12.5px">Figures are order-of-magnitude teaching numbers, not vendor benchmarks.</span>
+  </div>
+</footer>
+
+<script>
+(function(){
+  // theme toggle
+  var root=document.documentElement, btn=document.getElementById('themeBtn');
+  function sysDark(){return window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;}
+  var saved=null; try{saved=localStorage.getItem('csd-theme');}catch(e){}
+  if(saved){root.setAttribute('data-theme',saved);}
+  function cur(){return root.getAttribute('data-theme')|| (sysDark()?'dark':'light');}
+  btn.addEventListener('click',function(){
+    var next=cur()==='dark'?'light':'dark';
+    root.setAttribute('data-theme',next);
+    try{localStorage.setItem('csd-theme',next);}catch(e){}
+  });
+
+  // scroll progress
+  var bar=document.getElementById('progress');
+  function onScroll(){
+    var h=document.documentElement.scrollHeight-window.innerHeight;
+    bar.style.width=(h>0?(window.scrollY/h*100):0)+'%';
+  }
+  // scrollspy
+  var links=[].slice.call(document.querySelectorAll('nav.toc a'));
+  var secs=links.map(function(a){return document.getElementById(a.getAttribute('href').slice(1));});
+  function spy(){
+    var y=window.scrollY+120, idx=0;
+    for(var i=0;i<secs.length;i++){ if(secs[i]&&secs[i].offsetTop<=y) idx=i; }
+    links.forEach(function(l,i){l.classList.toggle('active',i===idx);});
+  }
+  window.addEventListener('scroll',function(){onScroll();spy();},{passive:true});
+  onScroll();spy();
+
+  // mobile TOC collapse
+  var toc=document.getElementById('toc');
+  if(window.matchMedia('(max-width:900px)').matches){ toc.classList.add('collapsed');
+    toc.querySelector('.tt').style.cursor='pointer';
+    toc.querySelector('.tt').addEventListener('click',function(){toc.classList.toggle('collapsed');});
+    toc.querySelector('.tt').textContent='Contents ▾';
+  }
+})();
+</script>
